@@ -1911,6 +1911,9 @@ const QUIZ_SESSION_RULES = {
   masteredCorrectCount: 3,
   unachievedMaxShows: 6,
   endTotalWrongs: 8,
+  randomStageMinWords: 40,
+  randomStageMinRate: 0.60,
+  randomStageSize: 30,
 };
 
 const DEBUG_STAGE_RATES = false;
@@ -2553,6 +2556,43 @@ function getEmbeddedStageWords(grade, lesson, stage){
   return entries
     .map((entry, index)=>parseWordEntry(entry, grade, lesson, stage, index))
     .filter(Boolean);
+}
+
+function getPreviousStageRef(grade, lesson, stage){
+  const lessons = COURSE[Number(grade)]?.lessons || [];
+  const lessonIndex = lessons.indexOf(String(lesson));
+  if (stage === "pre2"){
+    return { grade:Number(grade), lesson:String(lesson), stage:"pre1" };
+  }
+  if (stage === "pre1" && lessonIndex > 0){
+    return { grade:Number(grade), lesson:String(lessons[lessonIndex - 1]), stage:"pre2" };
+  }
+  return null;
+}
+
+function fillStageWordsFromPrevious(grade, lesson, stage, words, targetCount=30){
+  if (!Array.isArray(words) || words.length >= targetCount) return words;
+  const previous = getPreviousStageRef(grade, lesson, stage);
+  if (!previous) return words;
+
+  const previousWords = getEmbeddedStageWords(previous.grade, previous.lesson, previous.stage);
+  if (!previousWords.length) return words;
+
+  const filled = words.slice();
+  let round = 0;
+  while (filled.length < targetCount){
+    const randomWords = previousWords.slice();
+    shuffleInPlace(randomWords);
+    for (const word of randomWords){
+      if (filled.length >= targetCount) break;
+      filled.push({
+        ...word,
+        id:`borrowed-${previous.grade}-${previous.lesson}-${previous.stage}-${word.id}-${round}`,
+      });
+    }
+    round += 1;
+  }
+  return filled;
 }
 function readLessonCache(){
   try{ return JSON.parse(localStorage.getItem(LESSON_CACHE_KEY) || "{}") || {}; }
@@ -4494,7 +4534,8 @@ async function ensureStagePool(grade, lesson, stage){
   if (STAGE_POOL && STAGE_POOL.grade===grade && STAGE_POOL.lesson===lesson && STAGE_POOL.stage===stage) return STAGE_POOL;
 
   const sk = STUDENT.studentKey;
-  const wordsObj = getEmbeddedStageWords(grade, lesson, stage);
+  let wordsObj = getEmbeddedStageWords(grade, lesson, stage);
+  wordsObj = fillStageWordsFromPrevious(grade, lesson, stage, wordsObj, QUIZ_SESSION_RULES.randomStageSize);
   let progObj = getCachedStageProgress(sk, grade, lesson, stage);
   try{
     const remote = await dbGet(P.progressStage(sk, grade, lesson, stage), { timeoutMs:800, retries:0 });
@@ -4690,7 +4731,8 @@ async function apiQuestion(name, grade, lesson, stage){
     try{
       ensureSessionWordStats();
       if (typeof canAskWordId === "function" && SESSION){
-        const okc = candidates.filter(w=>canAskWordId(w.id));
+        const sessionIds = new Set(SESSION.wordIds || []);
+        const okc = candidates.filter(w=>sessionIds.has(String(w.id ?? "")) && canAskWordId(w.id));
         candidates = okc;
       }
     }catch(e){}
@@ -6006,6 +6048,7 @@ function computePlannedCount(meta, stage){
   return Math.min(total, Math.trunc(n)) * Math.max(1, QUIZ_RULES.repeatPerWord|0);
 }
 function startSession(lesson, stage, meta){
+  const savedRate = getStageRate01FromMeta(meta, stage);
   SESSION = {
     key: `${CURRENT.name}|${SELECTED_GRADE}|${lesson}|${stage}|${Date.now()}`,
     lesson, stage,
@@ -6015,6 +6058,9 @@ function startSession(lesson, stage, meta){
     totalWrongs: 0,
     wordStats: new Map(),
     wordIds: [],
+    wordPoolReady: false,
+    savedStageRate: savedRate,
+    isRandomStage: false,
     itemAwarded: false,
     rewardPrepared: false,
     preparedReward: null,
@@ -6038,8 +6084,21 @@ function endSessionIfNeeded(){
 function ensureSessionWordStats(){
   if (!SESSION || !STAGE_POOL || !Array.isArray(STAGE_POOL.words)) return;
   if (!SESSION.wordStats) SESSION.wordStats = new Map();
-  const ids = STAGE_POOL.words.map(w=>String(w.id ?? ""));
-  SESSION.wordIds = ids.filter(Boolean);
+  if (!SESSION.wordPoolReady){
+    const ids = STAGE_POOL.words.map(w=>String(w.id ?? "")).filter(Boolean);
+    const shouldUseRandomStage =
+      ids.length >= QUIZ_SESSION_RULES.randomStageMinWords &&
+      Number.isFinite(SESSION.savedStageRate) &&
+      SESSION.savedStageRate >= QUIZ_SESSION_RULES.randomStageMinRate;
+    if (shouldUseRandomStage){
+      shuffleInPlace(ids);
+      SESSION.wordIds = ids.slice(0, QUIZ_SESSION_RULES.randomStageSize);
+      SESSION.isRandomStage = true;
+    } else {
+      SESSION.wordIds = ids;
+    }
+    SESSION.wordPoolReady = true;
+  }
   SESSION.wordIds.forEach((id)=>{
     if (!SESSION.wordStats.has(id)){
       SESSION.wordStats.set(id, {
@@ -6083,9 +6142,7 @@ function applyWordAnswerStats(wordId, isCorrect, isFast){
   if (isCorrect){
     stats.correct = (stats.correct || 0) + 1;
     if (isFast) stats.fast = (stats.fast || 0) + 1;
-    stats.wrongStreak = 0;
   } else {
-    stats.fast = 0;
     stats.wrongStreak = (stats.wrongStreak || 0) + 1;
   }
   if (stats.fast >= QUIZ_SESSION_RULES.masteredFastCount || stats.correct >= QUIZ_SESSION_RULES.masteredCorrectCount){
@@ -6102,28 +6159,16 @@ function applySessionAnswerStats({ wordId, word, correctText, chosen, isCorrect,
     SESSION.wrongs.push({ wordId: String(wordId || ""), word: word || "", meaning: String(correctText || "") });
   }
   applyWordAnswerStats(wordId, isCorrect, isFast);
-  if (isCorrect && SESSION.wrongs.length){
-    const stats = getSessionWordStats(wordId);
-    if (stats?.achieved){
-      const key = String(wordId || "");
-      const before = SESSION.wrongs.length;
-      SESSION.wrongs = SESSION.wrongs.filter(w=> (w.wordId || "") !== key);
-      const removed = before - SESSION.wrongs.length;
-      if (removed > 0){
-        SESSION.correct += removed;
-        SESSION.totalWrongs = Math.max(0, (SESSION.totalWrongs || 0) - removed);
-      }
-    }
-  }
 }
 
 function pickFallbackWordId(excludeId){
   if (!SESSION || !STAGE_POOL || !Array.isArray(STAGE_POOL.words)) return null;
   ensureSessionWordStats();
   const exclude = String(excludeId ?? "");
+  const sessionIds = new Set(SESSION.wordIds || []);
   const candidates = STAGE_POOL.words
     .map(w=>({ id: String(w.id ?? ""), stats: SESSION.wordStats.get(String(w.id ?? "")) }))
-    .filter(x=> x.id && x.id !== exclude);
+    .filter(x=> x.id && x.id !== exclude && sessionIds.has(x.id) && !x.stats?.achieved && (x.stats?.shown || 0) < QUIZ_SESSION_RULES.unachievedMaxShows);
   if (!candidates.length) return null;
 
   candidates.sort((a, b)=>{
@@ -6153,8 +6198,10 @@ function pickFallbackWordId(excludeId){
 function openSessionResult(){
   if (!SESSION) return;
 
-  const totalAsked = Math.max(1, SESSION.asked || 0);
-  const pct = Math.round((SESSION.correct || 0) / totalAsked * 100);
+  const stageWordCount = Math.max(1, SESSION.wordIds?.length || 0);
+  const achievedCount = (SESSION.wordIds || []).reduce((sum, id)=>
+    sum + (SESSION.wordStats?.get(id)?.achieved ? 1 : 0), 0);
+  const pct = Math.round(achievedCount / stageWordCount * 100);
 
   // ✅ まず表示をリセット
   if (sessionReward){
