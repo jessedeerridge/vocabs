@@ -1817,11 +1817,9 @@ const STUDENT = { studentKey: null };
 
 const P = {
   students: (studentKey)=> `students/${studentKey}`,
-  wordsStage: (grade, lesson, stage)=> `words/${grade}/${lesson}/${stage}`,
   progressStage: (studentKey, grade, lesson, stage)=> `progress/${studentKey}/${grade}/${lesson}/${stage}`,
   progressWord: (studentKey, grade, lesson, stage, wordId)=> `progress/${studentKey}/${grade}/${lesson}/${stage}/${wordId}`,
   lessonStageDone: (studentKey, grade, lesson, stage)=> `lessonProgress/${studentKey}/${grade}/${lesson}/${stage}`,
-  wordsGrade: (grade)=> `words/${grade}`,
   bestStage: (studentKey, grade, lesson, stage)=> `bestProgress/${studentKey}/${grade}/${lesson}/${stage}`,
   asa: (studentKey)=> `asa/${studentKey}`,
 
@@ -1874,8 +1872,74 @@ const QUIZ_SESSION_RULES = {
 };
 
 const DEBUG_STAGE_RATES = false;
-const DEFAULT_MAX_GRADE = 8;
-const GRADE_SETTINGS_PATH = "settings/gradeButtons";
+/*
+ * 教材は Firebase に置かない。追加・修正はこの定数だけを編集する。
+ * localStorage のキーに教材の版を含めないことで、教材を追加しても生徒の
+ * 名前・学年・進捗キャッシュは消えない。
+ */
+const COURSE = Object.freeze({
+  1: { label:"Ⅰ", lessons:["1","2","3","4","5","6","7","8"] },
+  2: { label:"Ⅱ", lessons:["9","10","11","12","13","14","15"] },
+  3: { label:"Ⅲ", lessons:["1","2","3","4","5","6","7","8"] },
+  4: { label:"Ⅳ", lessons:["9","10","11","12","13","14","15"] },
+});
+
+const WORDS = Object.freeze({
+  1: {
+    "1": {
+      pre1: [
+        { id:"i-1-01", word:"洗澡", meaning:"おふろ", wrongs:["ところ","くもり"], example:"" },
+        { id:"i-1-02", word:"建筑", meaning:"たてもの", wrongs:["つくえ","かわ"], example:"" },
+        { id:"i-1-03", word:"生活", meaning:"せいかつ", wrongs:["さんせい","たいど"], example:"" },
+        { id:"i-1-04", word:"不擅长", meaning:"にがて", wrongs:["ざんねん","とくい"], example:"" },
+      ],
+      pre2: [],
+      review: [],
+    },
+  },
+});
+
+const LESSON_CACHE_KEY = "yuko_wordlog_lesson_progress";
+
+function getEmbeddedStageWords(grade, lesson, stage){
+  const lessonData = WORDS[Number(grade)]?.[String(lesson)] || {};
+  if (stage === "review"){
+    const explicit = lessonData.review || [];
+    return explicit.length ? explicit : [...(lessonData.pre1 || []), ...(lessonData.pre2 || [])];
+  }
+  return lessonData[stage] || [];
+}
+function readLessonCache(){
+  try{ return JSON.parse(localStorage.getItem(LESSON_CACHE_KEY) || "{}") || {}; }
+  catch(e){ return {}; }
+}
+function writeLessonCache(cache){
+  try{ localStorage.setItem(LESSON_CACHE_KEY, JSON.stringify(cache)); }catch(e){}
+}
+function stageCachePath(studentKey, grade, lesson, stage){
+  return [studentKey, String(grade), "progress", String(lesson), String(stage)];
+}
+function getCacheNode(path){
+  let node = readLessonCache();
+  for (const key of path) node = (node && typeof node === "object") ? node[key] : null;
+  return (node && typeof node === "object") ? node : {};
+}
+function mergeCacheNode(path, patch){
+  const root = readLessonCache();
+  let node = root;
+  path.forEach((key, index)=>{
+    if (!node[key] || typeof node[key] !== "object") node[key] = {};
+    if (index === path.length - 1) node[key] = { ...node[key], ...patch };
+    node = node[key];
+  });
+  writeLessonCache(root);
+}
+function getCachedStageProgress(studentKey, grade, lesson, stage){
+  return getCacheNode(stageCachePath(studentKey, grade, lesson, stage));
+}
+function setCachedStageProgress(studentKey, grade, lesson, stage, words){
+  mergeCacheNode([studentKey, String(grade), "progress", String(lesson)], { [String(stage)]:words });
+}
   
 /* ✅ アニメは“背景”として：FPSを落としてクイズに干渉しない */
 const BG_ANIM_FPS_LESSON = 24;
@@ -2497,7 +2561,7 @@ function renderAsaPop(){
 async function loadAsa(){
   if (!STUDENT.studentKey) return;
   try{
-    const raw = await dbGet(P.asa(STUDENT.studentKey));
+    const raw = await dbGet(P.asa(STUDENT.studentKey), { timeoutMs:800, retries:0 });
     applyAsaState(raw);
   }catch(_){
     applyAsaState(null);
@@ -3521,7 +3585,7 @@ function renderCharaSelectButtons(){
    ★ 学年（増える版）
 ========================= */
 function defaultGradeSettings(){
-  return Array.from({length: DEFAULT_MAX_GRADE}, (_,i)=>({ id: i+1, label: String(i+1), enabled: true }));
+  return Object.entries(COURSE).map(([id, cfg])=>({ id:Number(id), label:cfg.label, enabled:true }));
 }
 function normalizeGradeSettings(obj){
   const base = defaultGradeSettings();
@@ -3594,12 +3658,7 @@ function renderGradeButtons(){
 }
 
   async function loadGradeSettings(){
-  try{
-    const raw = await dbGet(GRADE_SETTINGS_PATH);
-    gradeSettings = normalizeGradeSettings(raw);
-  }catch(e){
-    gradeSettings = defaultGradeSettings();
-  }
+  gradeSettings = defaultGradeSettings();
   SELECTED_GRADE = normalizeSelectedGrade(Number(localStorage.getItem(GRADE_KEY) || SELECTED_GRADE || 1));
   buildGradeButtons();
   renderGradeButtons();
@@ -3614,15 +3673,14 @@ async function enterStudent(name){
   const now = nowTs();
   let existing = null;
   try{
-    existing = await dbGet(path);
+    existing = await dbGet(path, { timeoutMs:800, retries:0 });
   }catch(e){
     existing = null;
   }
 
-  await dbUpdate(path, { studentKey: sk, name, createdAt: now, lastSeenAt: now });
-  if (!existing || !existing.createdAt){
-    await ensureInitialItemsOwned();
-  }
+  /* 入室はネットワークを待たない。オンラインなら背景で同期する。 */
+  dbUpdate(path, { studentKey: sk, name, createdAt: existing?.createdAt || now, lastSeenAt: now }).catch(()=>{});
+  if (!existing || !existing.createdAt) ensureInitialItemsOwned().catch(()=>{});
   try{
     setInterval(()=> dbUpdate(path, { lastSeenAt: nowTs() }).catch(()=>{}), 30000);
   }catch(e){}
@@ -3635,10 +3693,15 @@ async function ensureStagePool(grade, lesson, stage){
   if (STAGE_POOL && STAGE_POOL.grade===grade && STAGE_POOL.lesson===lesson && STAGE_POOL.stage===stage) return STAGE_POOL;
 
   const sk = STUDENT.studentKey;
-  const [wordsObj, progObj] = await Promise.all([
-    dbGet(P.wordsStage(grade, lesson, stage)),
-    dbGet(P.progressStage(sk, grade, lesson, stage))
-  ]);
+  const wordsObj = getEmbeddedStageWords(grade, lesson, stage);
+  let progObj = getCachedStageProgress(sk, grade, lesson, stage);
+  try{
+    const remote = await dbGet(P.progressStage(sk, grade, lesson, stage), { timeoutMs:800, retries:0 });
+    if (remote && typeof remote === "object"){
+      progObj = { ...progObj, ...remote };
+      setCachedStageProgress(sk, grade, lesson, stage, progObj);
+    }
+  }catch(e){}
 
   const words = [];
 
@@ -3669,8 +3732,8 @@ async function ensureStagePool(grade, lesson, stage){
     return { wrongs: Array.from(new Set(outWrongs)), wrongFurigana: outMap };
   }
 
-  if (wordsObj && typeof wordsObj === "object"){
-    for (const [wid, v] of Object.entries(wordsObj)){
+  if (Array.isArray(wordsObj)){
+    for (const v of wordsObj){
       if (!v || typeof v !== "object") continue;
       const word = String(v.word ?? "").trim();
       const meaningParsed = splitTextAndFurigana(v.meaning);
@@ -3682,7 +3745,7 @@ async function ensureStagePool(grade, lesson, stage){
       const wrongFurigana = wrongNorm.wrongFurigana;
       if (!word || !meaning || wrongs.length < 1) continue;
 const example = String(v.example ?? "").trim();
-words.push({ id:String(wid), word, meaning, meaningFurigana, wrongs, wrongFurigana, example });
+words.push({ id:String(v.id), word, meaning, meaningFurigana, wrongs, wrongFurigana, example });
     }
   }
 
@@ -3744,18 +3807,7 @@ async function apiEnter(name){
 }
 
 async function apiMenu(name){
-  try{
-    const sk = STUDENT.studentKey;
-    const s = await dbGet(P.students(sk)) || {};
-    const last = Number(s.lastGrade);
-    return {
-      ok:true,
-      last_grade: Number.isFinite(last) && last>=1 ? last : null,
-      grades: activeGradeIds()
-    };
-  }catch(e){
-    return { ok:false, error:(e&&e.message)?e.message:String(e) };
-  }
+  return { ok:true, last_grade:Number(localStorage.getItem(GRADE_KEY)) || null, grades:activeGradeIds() };
 }
 
 async function apiLessons(name, grade){
@@ -3765,29 +3817,24 @@ async function apiLessons(name, grade){
 
     await dbUpdate(P.students(sk), { lastGrade:g, lastSeenAt: nowTs() }).catch(()=>{});
 
-const [wordsGrade, bestGrade, progGrade, doneGrade] = await Promise.all([
-  dbGet(P.wordsGrade(g)),
-  dbGet(`bestProgress/${sk}/${g}`),     // ✅ 追加：ベスト％
-  dbGet(`progress/${sk}/${g}`),         // （互換のため残す：bestが無い時だけ旧方式で計算用）
-  dbGet(`lessonProgress/${sk}/${g}`)
-]);
-
-
-    const wG = (wordsGrade && typeof wordsGrade==="object") ? wordsGrade : {};
-const bG = (bestGrade && typeof bestGrade==="object") ? bestGrade : {};
-const pG = (progGrade && typeof progGrade==="object") ? progGrade : {};
-    const dG = (doneGrade && typeof doneGrade==="object") ? doneGrade : {};
-
-    const lessons = Object.keys(wG).sort((a,b)=>{
-      const na = parseFloat(String(a).replace(/[^0-9.]/g,""));
-      const nb = parseFloat(String(b).replace(/[^0-9.]/g,""));
-      if (Number.isFinite(na) && Number.isFinite(nb) && na!==nb) return na-nb;
-      return String(a).localeCompare(String(b), "ja");
-    });
+    const lessons = COURSE[g]?.lessons || [];
+    const localGrade = getCacheNode([sk, String(g)]);
+    let remoteBest = {}, remoteProgress = {}, remoteDone = {};
+    try{
+      [remoteBest, remoteProgress, remoteDone] = await Promise.all([
+        dbGet(`bestProgress/${sk}/${g}`, {timeoutMs:800,retries:0}),
+        dbGet(`progress/${sk}/${g}`, {timeoutMs:800,retries:0}),
+        dbGet(`lessonProgress/${sk}/${g}`, {timeoutMs:800,retries:0})
+      ]);
+    }catch(e){}
+    const bG = { ...(localGrade.best || {}), ...(remoteBest || {}) };
+    const pG = { ...(localGrade.progress || {}), ...(remoteProgress || {}) };
+    const dG = { ...(localGrade.done || {}), ...(remoteDone || {}) };
+    mergeCacheNode([sk, String(g)], { best:bG, progress:pG, done:dG });
 
 function calc(lesson, stage){
-  const stageObj = (wG[lesson] && wG[lesson][stage] && typeof wG[lesson][stage]==="object") ? wG[lesson][stage] : {};
-  const wordIds = Object.keys(stageObj);
+  const stageObj = getEmbeddedStageWords(g, lesson, stage);
+  const wordIds = stageObj.map(word=>String(word.id));
   const total = wordIds.length;
 
   // ✅ 1) ベスト％があればそれを採用（これが本命）
@@ -3935,6 +3982,19 @@ async function apiAnswer(name, word_id, chosen){
     const c = String(chosen ?? "");
     const is_correct = (c === correct);
 
+    /* DB がオフラインでも、先に端末へ回答進捗を確定する。 */
+    const local = (STAGE_POOL.prog?.[wid] && typeof STAGE_POOL.prog[wid] === "object")
+      ? { ...STAGE_POOL.prog[wid] }
+      : { correctCount:0, wrongCount:0, mastered:false, lastAt:0 };
+    if (is_correct) local.correctCount = (local.correctCount || 0) + 1;
+    else local.wrongCount = (local.wrongCount || 0) + 1;
+    local.lastAt = nowTs();
+    local.mastered = local.mastered || is_correct;
+    local.lastChosen = c;
+    local.lastCorrect = correct;
+    STAGE_POOL.prog[wid] = local;
+    setCachedStageProgress(sk, g, lesson, stage, STAGE_POOL.prog);
+
     const path = P.progressWord(sk, g, lesson, stage, wid);
     await runTransaction(ref(db, path), (cur)=>{
       const now = nowTs();
@@ -3948,15 +4008,7 @@ async function apiAnswer(name, word_id, chosen){
       base.lastChosen = c;
       base.lastCorrect = correct;
       return base;
-    });
-
-    if (STAGE_POOL){
-      STAGE_POOL.prog = STAGE_POOL.prog || {};
-      const base = (STAGE_POOL.prog[wid] && typeof STAGE_POOL.prog[wid]==="object") ? STAGE_POOL.prog[wid] : {};
-      base.mastered = base.mastered || is_correct;
-      base.lastAt = nowTs();
-      STAGE_POOL.prog[wid] = base;
-    }
+    }).catch(()=>{});
 
     return { ok:true, is_correct, correct, chosen: c };
   }catch(e){
@@ -3970,7 +4022,10 @@ async function apiLessonComplete(name, grade, lesson, stage){
     const g = Number(grade)||SELECTED_GRADE;
     const l = String(lesson||"");
     const s = String(stage||"pre1");
-    await dbSet(P.lessonStageDone(sk, g, l, s), { completedAt: nowTs() });
+    const done = { completedAt: nowTs() };
+    const cached = getCacheNode([sk, String(g), "done", l]);
+    mergeCacheNode([sk, String(g), "done", l], { ...cached, [s]:done });
+    await dbSet(P.lessonStageDone(sk, g, l, s), done).catch(()=>{});
     return { ok:true };
   }catch(e){
     return { ok:false, error:(e&&e.message)?e.message:String(e) };
@@ -3985,6 +4040,18 @@ async function apiSaveBestStage(name, grade, lesson, stage, pct){
     const p = clamp(Number(pct)||0, 0, 100);
 
     const path = P.bestStage(sk, g, l, s);
+
+    const previous = getCacheNode([sk, String(g), "best", l, s]);
+    const now = nowTs();
+    const localBest = {
+      ...previous,
+      plays:(Number(previous.plays)||0) + 1,
+      lastPct:p,
+      lastAt:now,
+      bestPct:Math.max(Number(previous.bestPct)||0, p),
+      bestAt:p >= (Number(previous.bestPct)||0) ? now : previous.bestAt,
+    };
+    mergeCacheNode([sk, String(g), "best", l], { [s]:localBest });
 
     await runTransaction(ref(db, path), (cur)=>{
       const now = nowTs();
@@ -4006,7 +4073,7 @@ async function apiSaveBestStage(name, grade, lesson, stage, pct){
         base.bestAt = now;
       }
       return base;
-    });
+    }).catch(()=>{});
 
     return { ok:true };
   }catch(e){
@@ -4060,10 +4127,10 @@ function closeLowRatePop(){
 }
 
 async function fetchRandomExamples(grade, lesson, stage, n=3){
-  const obj = await dbGet(P.wordsStage(grade, lesson, stage));
+  const obj = getEmbeddedStageWords(grade, lesson, stage);
   const arr = [];
-  if (obj && typeof obj === "object"){
-    for (const v of Object.values(obj)){
+  if (Array.isArray(obj)){
+    for (const v of obj){
       if (!v || typeof v !== "object") continue;
       const word = String(v.word ?? "").trim();
       const meaning = String(v.meaning ?? "").trim();
@@ -4410,11 +4477,9 @@ requestAnimationFrame(fitFlashModalWidth);
 
   let list = [];
   try{
-    const obj = await dbGet(P.wordsStage(grade, lesson, stage));
-    if (obj && typeof obj === "object"){
-      const entries = Object.entries(obj);
-      entries.sort((a,b)=> String(a[0]).localeCompare(String(b[0]))); // 安定順
-      for (const [, v] of entries){
+    const obj = getEmbeddedStageWords(grade, lesson, stage);
+    if (Array.isArray(obj)){
+      for (const v of obj){
         if (!v || typeof v !== "object") continue;
         const word = String(v.word ?? "").trim();
         const meaningRaw = String(v.meaning ?? "").trim();
