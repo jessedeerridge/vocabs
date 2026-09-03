@@ -42,7 +42,7 @@
     const firebaseConfig={apiKey:"AIzaSyDEwJejLA1DnsoXVbCx_wfo3nmPtw5mbeQ",authDomain:"class-files-c5fef.firebaseapp.com",databaseURL:"https://class-files-c5fef-default-rtdb.firebaseio.com",projectId:"class-files-c5fef",storageBucket:"class-files-c5fef.firebasestorage.app",messagingSenderId:"373131822812",appId:"1:373131822812:web:f8bb96f3bb9cfe51f2d619"};
     const app=initializeApp(firebaseConfig),db=getDatabase(app),auth=getAuth(app);
     const COURSE=Object.freeze({1:{label:"Ⅰ",lessons:["1","2","3","4","5","6","7","8"]},2:{label:"Ⅱ",lessons:["9","10","11","12","13","14","15"]},3:{label:"Ⅲ",lessons:["1","2","3","4","5","6","7","8"]},4:{label:"Ⅳ",lessons:["9","10","11","12","13","14","15"]}});
-    const $=id=>document.getElementById(id);
+    const $=id=>document.getElementById(id); const ADMIN_EMAIL_KEY="yuko_wordlog_admin_email";
     const grades=$("grades"),title=$("title"),students=$("students"),message=$("message"),detail=$("detail"),detailTitle=$("detailTitle"),lessonRows=$("lessonRows"),login=$("login"),loginForm=$("loginForm"),loginError=$("loginError"),email=$("email"),password=$("password"),logout=$("logout"),reload=$("reload"),closeDetail=$("closeDetail"),authState=$("authState");
     let selectedGrade=1; let studentsRoot={}; let bestRoot={};
     const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -56,7 +56,8 @@
       message.textContent=list.length?`${list.length}人を表示しています。`:"この学年の学生データはありません。"}
     function showDetail(key,s){detailTitle.textContent=`${s?.name||key} / ${COURSE[selectedGrade].label}`;lessonRows.innerHTML="";for(const lesson of COURSE[selectedGrade].lessons){const p1=stagePct(key,lesson,"pre1"),p2=stagePct(key,lesson,"pre2");const tr=document.createElement("tr");tr.innerHTML=`<td>${lesson}</td><td class="pct ${pctClass(p1)}">${pct(p1)}</td><td class="pct ${pctClass(p2)}">${pct(p2)}</td>`;lessonRows.appendChild(tr)}detail.showModal()}
     async function loadStudents(){message.textContent="読み込み中…";try{const [studentsSnap,bestSnap]=await Promise.all([get(ref(db,"students")),get(ref(db,"bestProgress"))]);studentsRoot=studentsSnap.exists()?studentsSnap.val():{};bestRoot=bestSnap.exists()?bestSnap.val():{};renderStudents()}catch(e){message.textContent=`読み込み失敗: ${e.message}`}}
-    loginForm.onsubmit=async e=>{e.preventDefault();loginError.textContent="";try{await signInWithEmailAndPassword(auth,email.value.trim(),password.value)}catch(err){loginError.textContent="ログインできませんでした。"}};
+    email.value=localStorage.getItem(ADMIN_EMAIL_KEY)||"";
+    loginForm.onsubmit=async e=>{e.preventDefault();loginError.textContent="";const loginName=email.value.trim();localStorage.setItem(ADMIN_EMAIL_KEY,loginName);try{await signInWithEmailAndPassword(auth,loginName,password.value)}catch(err){loginError.textContent="ログインできませんでした。"}};
     logout.onclick=()=>signOut(auth);reload.onclick=loadStudents;closeDetail.onclick=()=>detail.close();
     onAuthStateChanged(auth,user=>{login.style.display=user?"none":"grid";logout.hidden=!user;authState.textContent=user?user.email:"未ログイン";if(user)loadStudents();else{studentsRoot={};bestRoot={};renderStudents()}});
     renderGrades();renderStudents();

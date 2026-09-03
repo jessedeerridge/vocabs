@@ -1751,8 +1751,6 @@ font-size: var(--reviewWordMaxPx);
 
 
 <script type="module">
-import { initializeApp } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-app.js";
-import { getDatabase, ref, get, set, update, runTransaction, goOffline } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-database.js";
 
 /* =========================
    ✅ Firebase（Realtime Database）
@@ -1767,13 +1765,33 @@ const firebaseConfig = {
   appId: "1:373131822812:web:f8bb96f3bb9cfe51f2d619",
   measurementId: "G-5KP73MM8T9"};
 
-const app = initializeApp(firebaseConfig);
-const db = getDatabase(app);
+let db = null;
+let ref, get, set, update, runTransaction, goOffline;
+let _firebaseLoadPromise = null;
+function ensureFirebaseReady(){
+  if (db) return Promise.resolve(db);
+  if (_firebaseLoadPromise) return _firebaseLoadPromise;
+  _firebaseLoadPromise = Promise.all([
+    import("https://www.gstatic.com/firebasejs/9.23.0/firebase-app.js"),
+    import("https://www.gstatic.com/firebasejs/9.23.0/firebase-database.js")
+  ]).then(([appApi, dbApi])=>{
+    const app = appApi.initializeApp(firebaseConfig);
+    ({ ref, get, set, update, runTransaction, goOffline } = dbApi);
+    db = dbApi.getDatabase(app);
+    firebaseConnectionStatus.textContent = "接続可能";
+    return db;
+  }).catch(error=>{
+    _firebaseLoadPromise = null; // ホームへ戻った時に再試行できるようにする
+    firebaseConnectionStatus.textContent = "オフライン";
+    throw error;
+  });
+  return _firebaseLoadPromise;
+}
 
 const firebaseDisconnect = document.getElementById("firebaseDisconnect");
 const firebaseConnectionStatus = document.getElementById("firebaseConnectionStatus");
 firebaseDisconnect.addEventListener("click", ()=>{
-  goOffline(db);
+  if (db && goOffline) goOffline(db);
   firebaseConnectionStatus.textContent = "遮断中";
   firebaseDisconnect.disabled = true;
   firebaseDisconnect.setAttribute("aria-pressed", "true");
@@ -1789,6 +1807,10 @@ async function dbGet(path, options={}){
   let lastError = null;
   for (let attempt = 0; attempt <= retries; attempt++){
     try{
+      await Promise.race([
+        ensureFirebaseReady(),
+        new Promise((_, reject)=> setTimeout(()=> reject(new Error("firebase_load_timeout")), timeoutMs))
+      ]);
       const snap = await Promise.race([
         get(ref(db, path)),
         new Promise((_, reject)=> setTimeout(()=> reject(new Error("db_get_timeout")), timeoutMs))
@@ -1805,9 +1827,11 @@ async function dbGet(path, options={}){
   throw lastError || new Error("db_get_failed");
 }
 async function dbSet(path, value){
+  await ensureFirebaseReady();
   await set(ref(db, path), value);
 }
 async function dbUpdate(path, patch){
+  await ensureFirebaseReady();
   await update(ref(db, path), patch);
 }
 
@@ -1939,6 +1963,28 @@ function getCachedStageProgress(studentKey, grade, lesson, stage){
 }
 function setCachedStageProgress(studentKey, grade, lesson, stage, words){
   mergeCacheNode([studentKey, String(grade), "progress", String(lesson)], { [String(stage)]:words });
+}
+
+/* オフライン中に端末へ保存した進捗を、ホーム表示のたびにDBへ再送する。 */
+async function syncCachedProgressToDb(studentKey){
+  if (!studentKey) return false;
+  try{
+    await ensureFirebaseReady();
+    const studentCache = getCacheNode([studentKey]);
+    const writes = [];
+    for (const [grade, gradeCache] of Object.entries(studentCache)){
+      if (!COURSE[Number(grade)] || !gradeCache || typeof gradeCache !== "object") continue;
+      if (gradeCache.progress) writes.push(dbUpdate(`progress/${studentKey}/${grade}`, gradeCache.progress));
+      if (gradeCache.best) writes.push(dbUpdate(`bestProgress/${studentKey}/${grade}`, gradeCache.best));
+      if (gradeCache.done) writes.push(dbUpdate(`lessonProgress/${studentKey}/${grade}`, gradeCache.done));
+    }
+    await Promise.all(writes);
+    firebaseConnectionStatus.textContent = "同期済み";
+    return true;
+  }catch(e){
+    firebaseConnectionStatus.textContent = "オフライン（端末保存）";
+    return false;
+  }
 }
   
 /* ✅ アニメは“背景”として：FPSを落としてクイズに干渉しない */
@@ -4927,6 +4973,11 @@ function showNameScreen(){
 async function showLessonList(){
   IN_ROOM = true;
 
+  /* 入室時・クイズから戻った時のどちらも接続とキャッシュ同期を再試行する。 */
+  syncCachedProgressToDb(STUDENT.studentKey).then(ok=>{
+    if (ok) refreshLessons().catch(()=>{});
+  });
+
   studentTop.style.display = "none";
   lessonListBox.style.display = "";
   quizBox.style.display = "none";
@@ -6247,7 +6298,7 @@ async function startFlow(){
     CURRENT.name = normName(j.name || name);
     await applyLastGradeFromMenu();
     prefetchLessons();
-    await loadAsa();
+    loadAsa().catch(()=>{});
     await loadCharaItemPlacements();
 
     setStuStatus("入室OK（課を押してね）", true);
@@ -7361,7 +7412,6 @@ const initialLoads = [
 if (savedName){
   initialLoads.push(loadCharaItemPlacements());
 }
-await Promise.all(initialLoads);
 preloadCharaImages();
 preloadLessonAssets();
 renderCharaSelectButtons();
@@ -7369,6 +7419,12 @@ renderCharaItems();
 updateCharaSelectPreview();
 showNameScreen();
 syncDropletColorToGauge();
+/* Firebase/CDNが落ちていてもトップ画面を先に表示し、装飾だけ後から反映する。 */
+Promise.all(initialLoads).then(()=>{
+  renderCharaSelectButtons();
+  renderCharaItems();
+  updateCharaSelectPreview();
+}).catch(()=>{});
 </script>
 </body>
 </html>
