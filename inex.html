@@ -1981,6 +1981,67 @@ function setCachedStageProgress(studentKey, grade, lesson, stage, words){
   mergeCacheNode([studentKey, String(grade), "progress", String(lesson)], { [String(stage)]:words });
 }
 
+function mergeProgressForSync(remote = {}, local = {}){
+  const merged = structuredClone(remote || {});
+  for (const [lesson, stages] of Object.entries(local || {})){
+    if (!merged[lesson] || typeof merged[lesson] !== "object") merged[lesson] = {};
+    for (const [stage, words] of Object.entries(stages || {})){
+      if (!merged[lesson][stage] || typeof merged[lesson][stage] !== "object") merged[lesson][stage] = {};
+      for (const [wordId, localWord] of Object.entries(words || {})){
+        const remoteWord = merged[lesson][stage][wordId] || {};
+        const remoteAt = Number(remoteWord.lastAt) || 0;
+        const localAt = Number(localWord?.lastAt) || 0;
+        const latest = localAt >= remoteAt ? localWord : remoteWord;
+        merged[lesson][stage][wordId] = {
+          ...remoteWord,
+          ...(latest || {}),
+          correctCount:Math.max(Number(remoteWord.correctCount)||0, Number(localWord?.correctCount)||0),
+          wrongCount:Math.max(Number(remoteWord.wrongCount)||0, Number(localWord?.wrongCount)||0),
+          mastered:Boolean(remoteWord.mastered || localWord?.mastered),
+          lastAt:Math.max(remoteAt, localAt)
+        };
+      }
+    }
+  }
+  return merged;
+}
+
+function mergeBestForSync(remote = {}, local = {}){
+  const merged = structuredClone(remote || {});
+  for (const [lesson, stages] of Object.entries(local || {})){
+    if (!merged[lesson] || typeof merged[lesson] !== "object") merged[lesson] = {};
+    for (const [stage, localBest] of Object.entries(stages || {})){
+      const remoteBest = merged[lesson][stage] || {};
+      const remotePct = Number(remoteBest.bestPct) || 0;
+      const localPct = Number(localBest?.bestPct) || 0;
+      const highest = localPct > remotePct ? localBest : remoteBest;
+      const latest = (Number(localBest?.lastAt)||0) >= (Number(remoteBest.lastAt)||0) ? localBest : remoteBest;
+      merged[lesson][stage] = {
+        ...remoteBest,
+        ...(latest || {}),
+        bestPct:Math.max(remotePct, localPct),
+        bestAt:highest?.bestAt || 0,
+        plays:Math.max(Number(remoteBest.plays)||0, Number(localBest?.plays)||0)
+      };
+    }
+  }
+  return merged;
+}
+
+function mergeDoneForSync(remote = {}, local = {}){
+  const merged = structuredClone(remote || {});
+  for (const [lesson, stages] of Object.entries(local || {})){
+    if (!merged[lesson] || typeof merged[lesson] !== "object") merged[lesson] = {};
+    for (const [stage, localDone] of Object.entries(stages || {})){
+      const remoteDone = merged[lesson][stage];
+      if (!remoteDone?.completedAt || (localDone?.completedAt && localDone.completedAt < remoteDone.completedAt)){
+        merged[lesson][stage] = localDone;
+      }
+    }
+  }
+  return merged;
+}
+
 function comparableName(value){
   return String(value || "").normalize("NFKC").trim().toLocaleLowerCase("ja");
 }
@@ -2040,9 +2101,9 @@ async function syncCachedProgressToDb(studentKey){
           dbGet(`lessonProgress/${studentKey}/${grade}`, {timeoutMs:1200,retries:0})
         ]);
         mergeCacheNode([studentKey, grade], {
-          progress:{ ...(remoteProgress || {}), ...(localGrade.progress || {}) },
-          best:{ ...(remoteBest || {}), ...(localGrade.best || {}) },
-          done:{ ...(remoteDone || {}), ...(localGrade.done || {}) }
+          progress:mergeProgressForSync(remoteProgress, localGrade.progress),
+          best:mergeBestForSync(remoteBest, localGrade.best),
+          done:mergeDoneForSync(remoteDone, localGrade.done)
         });
       }catch(e){}
     }
@@ -2050,9 +2111,21 @@ async function syncCachedProgressToDb(studentKey){
     const writes = [];
     for (const [grade, gradeCache] of Object.entries(studentCache)){
       if (!COURSE[Number(grade)] || !gradeCache || typeof gradeCache !== "object") continue;
-      if (gradeCache.progress) writes.push(dbUpdate(`progress/${studentKey}/${grade}`, gradeCache.progress));
-      if (gradeCache.best) writes.push(dbUpdate(`bestProgress/${studentKey}/${grade}`, gradeCache.best));
-      if (gradeCache.done) writes.push(dbUpdate(`lessonProgress/${studentKey}/${grade}`, gradeCache.done));
+      if (gradeCache.progress) writes.push(
+        runTransaction(ref(db, `progress/${studentKey}/${grade}`), current=>
+          mergeProgressForSync(current, gradeCache.progress)
+        ).then(result=>mergeCacheNode([studentKey, grade], { progress:result.snapshot.val() || {} }))
+      );
+      if (gradeCache.best) writes.push(
+        runTransaction(ref(db, `bestProgress/${studentKey}/${grade}`), current=>
+          mergeBestForSync(current, gradeCache.best)
+        ).then(result=>mergeCacheNode([studentKey, grade], { best:result.snapshot.val() || {} }))
+      );
+      if (gradeCache.done) writes.push(
+        runTransaction(ref(db, `lessonProgress/${studentKey}/${grade}`), current=>
+          mergeDoneForSync(current, gradeCache.done)
+        ).then(result=>mergeCacheNode([studentKey, grade], { done:result.snapshot.val() || {} }))
+      );
     }
     await Promise.all(writes);
     firebaseConnectionStatus.textContent = "同期済み";
