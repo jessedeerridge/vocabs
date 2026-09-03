@@ -101,6 +101,27 @@
       font-weight:900;
     }
     .firebase-control button:disabled{ opacity:.55; cursor:default; }
+    .db-activity-indicator{
+      position:fixed;
+      top:max(8px, env(safe-area-inset-top, 0px));
+      right:max(8px, env(safe-area-inset-right, 0px));
+      z-index:10000;
+      width:auto;
+      min-width:30px;
+      height:18px;
+      display:grid;
+      place-items:center;
+      font-size:11px;
+      line-height:1;
+      padding:0;
+      border:0;
+      border-radius:50%;
+      background:transparent;
+      color:inherit;
+      cursor:default;
+      opacity:.55;
+      user-select:none;
+    }
     .card{background:#fff;border:1px solid #eee;border-radius:14px;padding:14px;margin:12px 0}
     .muted{opacity:.7;font-size:13px}
     .ok{color:#0a7a2f}
@@ -1564,6 +1585,7 @@ font-size: var(--reviewWordMaxPx);
   <button id="firebaseDisconnect" type="button" aria-describedby="firebaseConnectionStatus" aria-pressed="false">接続</button>
   <span id="firebaseConnectionStatus" role="status" aria-live="polite">非接続</span>
 </div>
+<button class="db-activity-indicator" id="dbActivityIndicator" type="button" role="status" aria-live="polite" aria-label="DB送受信未成功" title="DB送受信未成功">╌ / ╌</button>
 <main>
   <section id="studentSec">
 
@@ -1772,6 +1794,36 @@ let db = null;
 let ref, get, set, update, runTransaction, goOffline, goOnline;
 let _firebaseLoadPromise = null;
 let DB_CONNECTION_ENABLED = false;
+let DB_ACTIVITY_EPOCH = 0;
+let DB_ACTIVITY_SUCCEEDED = false;
+let DB_ACTIVITY_SESSION_ACTIVE = false;
+const dbActivityIndicator = document.getElementById("dbActivityIndicator");
+
+function renderDbActivityIndicator(){
+  dbActivityIndicator.textContent = DB_ACTIVITY_SUCCEEDED ? "╌✧╌" : "╌ / ╌";
+  const label = DB_ACTIVITY_SUCCEEDED ? "DB送受信成功済み" : "DB送受信未成功";
+  dbActivityIndicator.setAttribute("aria-label", label);
+  dbActivityIndicator.title = label;
+}
+function resetDbActivityIndicator(){
+  DB_ACTIVITY_EPOCH++;
+  DB_ACTIVITY_SUCCEEDED = false;
+  renderDbActivityIndicator();
+}
+function startDbActivitySession(){
+  DB_ACTIVITY_SESSION_ACTIVE = true;
+  resetDbActivityIndicator();
+}
+function endDbActivitySession(){
+  DB_ACTIVITY_SESSION_ACTIVE = false;
+  resetDbActivityIndicator();
+}
+function markDbActivitySucceeded(epoch){
+  if (!DB_ACTIVITY_SESSION_ACTIVE || !DB_CONNECTION_ENABLED || epoch !== DB_ACTIVITY_EPOCH) return;
+  DB_ACTIVITY_SUCCEEDED = true;
+  renderDbActivityIndicator();
+}
+
 function ensureFirebaseReady(){
   if (!DB_CONNECTION_ENABLED) return Promise.reject(new Error("db_connection_disabled"));
   if (db) return Promise.resolve(db);
@@ -1819,6 +1871,7 @@ function delay(ms){
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 async function dbGet(path, options={}){
+  const activityEpoch = DB_ACTIVITY_EPOCH;
   const timeoutMs = Number.isFinite(options.timeoutMs) ? options.timeoutMs : 5000;
   const retries = Number.isFinite(options.retries) ? options.retries : 2;
 
@@ -1833,6 +1886,7 @@ async function dbGet(path, options={}){
         get(ref(db, path)),
         new Promise((_, reject)=> setTimeout(()=> reject(new Error("db_get_timeout")), timeoutMs))
       ]);
+      markDbActivitySucceeded(activityEpoch);
       return snap.exists() ? snap.val() : null;
     }catch(e){
       lastError = e;
@@ -1845,12 +1899,23 @@ async function dbGet(path, options={}){
   throw lastError || new Error("db_get_failed");
 }
 async function dbSet(path, value){
+  const activityEpoch = DB_ACTIVITY_EPOCH;
   await ensureFirebaseReady();
   await set(ref(db, path), value);
+  markDbActivitySucceeded(activityEpoch);
 }
 async function dbUpdate(path, patch){
+  const activityEpoch = DB_ACTIVITY_EPOCH;
   await ensureFirebaseReady();
   await update(ref(db, path), patch);
+  markDbActivitySucceeded(activityEpoch);
+}
+async function dbRunTransaction(databaseRef, transactionUpdate){
+  const activityEpoch = DB_ACTIVITY_EPOCH;
+  await ensureFirebaseReady();
+  const result = await runTransaction(databaseRef, transactionUpdate);
+  markDbActivitySucceeded(activityEpoch);
+  return result;
 }
 
 function nowTs(){ return Date.now(); }
@@ -2757,17 +2822,17 @@ async function syncCachedProgressToDb(studentKey){
     for (const [grade, gradeCache] of Object.entries(studentCache)){
       if (!COURSE[Number(grade)] || !gradeCache || typeof gradeCache !== "object") continue;
       if (gradeCache.progress) writes.push(
-        runTransaction(ref(db, `progress/${studentKey}/${grade}`), current=>
+        dbRunTransaction(ref(db, `progress/${studentKey}/${grade}`), current=>
           mergeProgressForSync(current, gradeCache.progress)
         ).then(result=>mergeCacheNode([studentKey, grade], { progress:result.snapshot.val() || {} }))
       );
       if (gradeCache.best) writes.push(
-        runTransaction(ref(db, `bestProgress/${studentKey}/${grade}`), current=>
+        dbRunTransaction(ref(db, `bestProgress/${studentKey}/${grade}`), current=>
           mergeBestForSync(current, gradeCache.best)
         ).then(result=>mergeCacheNode([studentKey, grade], { best:result.snapshot.val() || {} }))
       );
       if (gradeCache.done) writes.push(
-        runTransaction(ref(db, `lessonProgress/${studentKey}/${grade}`), current=>
+        dbRunTransaction(ref(db, `lessonProgress/${studentKey}/${grade}`), current=>
           mergeDoneForSync(current, gradeCache.done)
         ).then(result=>mergeCacheNode([studentKey, grade], { done:result.snapshot.val() || {} }))
       );
@@ -3409,7 +3474,7 @@ async function loadAsa(){
 async function updateAsaViaTransaction(modifier){
   if (!STUDENT.studentKey) return;
   const path = ref(db, P.asa(STUDENT.studentKey));
-  const res = await runTransaction(path, (cur)=>{
+  const res = await dbRunTransaction(path, (cur)=>{
     const base = normalizeAsa(cur);
     const next = modifier({
       total: Math.max(0, base.total),
@@ -4807,7 +4872,7 @@ async function apiAnswer(name, word_id, chosen){
     setCachedStageProgress(sk, g, lesson, stage, STAGE_POOL.prog);
 
     const path = P.progressWord(sk, g, lesson, stage, wid);
-    await runTransaction(ref(db, path), (cur)=>{
+    await dbRunTransaction(ref(db, path), (cur)=>{
       const now = nowTs();
       const base = (cur && typeof cur === "object") ? cur : {
         correctCount: 0, wrongCount: 0, mastered: false, lastAt: 0
@@ -4864,7 +4929,7 @@ async function apiSaveBestStage(name, grade, lesson, stage, pct){
     };
     mergeCacheNode([sk, String(g), "best", l], { [s]:localBest });
 
-    await runTransaction(ref(db, path), (cur)=>{
+    await dbRunTransaction(ref(db, path), (cur)=>{
       const now = nowTs();
       const base = (cur && typeof cur === "object") ? cur : {
         bestPct: 0,
@@ -5711,6 +5776,7 @@ function showNameScreen(){
   if (DB_CONNECTION_ENABLED && STUDENT.studentKey){
     syncCachedProgressToDb(STUDENT.studentKey);
   }
+  endDbActivitySession();
 
   studentTop.style.display = "";
   lessonListBox.style.display = "none";
@@ -5743,6 +5809,7 @@ function showNameScreen(){
 
 async function showLessonList(){
   IN_ROOM = true;
+  startDbActivitySession();
 
   /* 入室時・クイズから戻った時のどちらも接続とキャッシュ同期を再試行する。 */
   syncCachedProgressToDb(STUDENT.studentKey).then(ok=>{
@@ -8220,6 +8287,7 @@ renderCharaItems();
 updateCharaSelectPreview();
 showNameScreen();
 syncDropletColorToGauge();
+window.addEventListener("pagehide", endDbActivitySession);
 /* Firebase/CDNが落ちていてもトップ画面を先に表示し、装飾だけ後から反映する。 */
 Promise.all(initialLoads).then(()=>{
   renderCharaSelectButtons();
