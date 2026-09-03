@@ -1730,13 +1730,14 @@ import { getDatabase, ref, get, set, update, runTransaction } from "https://www.
    ✅ Firebase（Realtime Database）
 ========================= */
 const firebaseConfig = {
-  apiKey: "AIzaSyARne6Jb4ePPe7vbvLryE_P-jZ2umI3LFc",
-  authDomain: "kakapo-8d297.firebaseapp.com",
-  databaseURL: "https://kakapo-8d297-default-rtdb.firebaseio.com",
-  projectId: "kakapo-8d297",
-  storageBucket: "kakapo-8d297.firebasestorage.app",
-  messagingSenderId: "702767130857",
-  appId: "1:702767130857:web:54472c8d5ea09bd3cf6878"
+  apiKey: "AIzaSyDEwJejLA1DnsoXVbCx_wfo3nmPtw5mbeQ",
+  authDomain: "class-files-c5fef.firebaseapp.com",
+  databaseURL: "https://class-files-c5fef-default-rtdb.firebaseio.com",
+  projectId: "class-files-c5fef",
+  storageBucket: "class-files-c5fef.firebasestorage.app",
+  messagingSenderId: "373131822812",
+  appId: "1:373131822812:web:f8bb96f3bb9cfe51f2d619",
+  measurementId: "G-5KP73MM8T9"
 };
 
 const app = initializeApp(firebaseConfig);
