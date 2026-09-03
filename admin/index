@@ -41,7 +41,7 @@
 
     const firebaseConfig={apiKey:"AIzaSyDEwJejLA1DnsoXVbCx_wfo3nmPtw5mbeQ",authDomain:"class-files-c5fef.firebaseapp.com",databaseURL:"https://class-files-c5fef-default-rtdb.firebaseio.com",projectId:"class-files-c5fef",storageBucket:"class-files-c5fef.firebasestorage.app",messagingSenderId:"373131822812",appId:"1:373131822812:web:f8bb96f3bb9cfe51f2d619"};
     const app=initializeApp(firebaseConfig),db=getDatabase(app),auth=getAuth(app);
-    const COURSE=Object.freeze({1:{label:"Ⅰ",lessons:["1","2","3","4","5","6","7","8"]},2:{label:"Ⅱ",lessons:["9","10","11","12","13","14","15"]},3:{label:"Ⅲ",lessons:["1","2","3","4","5","6","7","8"]},4:{label:"Ⅳ",lessons:["9","10","11","12","13","14","15"]}});
+    const COURSE=Object.freeze({1:{label:"Ⅰ",lessons:["1","2","3","4","5","6","7"]},2:{label:"Ⅱ",lessons:["8","9","10","11","12","13","14","15"]},3:{label:"Ⅲ",lessons:["1","2","3","4","5","6","7"]},4:{label:"Ⅳ",lessons:["8","9","10","11","12","13","14","15"]}});
     const $=id=>document.getElementById(id); const ADMIN_EMAIL_KEY="yuko_wordlog_admin_email";
     const grades=$("grades"),title=$("title"),studentHead=$("studentHead"),students=$("students"),message=$("message"),detail=$("detail"),detailTitle=$("detailTitle"),lessonRows=$("lessonRows"),login=$("login"),loginForm=$("loginForm"),loginError=$("loginError"),email=$("email"),password=$("password"),logout=$("logout"),reload=$("reload"),closeDetail=$("closeDetail"),authState=$("authState");
     let selectedGrade=1; let studentsRoot={}; let bestRoot={};
