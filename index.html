@@ -5124,7 +5124,8 @@ async function finalizeReviewBallsAndShowResult(){
   // フリーズ解除（ここから先は更新OK）
   QUIZ_REVIEW_BALLS_FROZEN = false;
 
-  const prev = QUIZ_REVIEW_BALLS_START_COUNT;
+  const key = `${CURRENT.name}|${SELECTED_GRADE}|${normLesson(CURRENT.lesson)}`;
+  const prev = _quizReviewBallPrev.get(key) ?? QUIZ_REVIEW_BALLS_START_COUNT;
   const lesson = CURRENT.lesson;
 
   // 「最後の問題が終わった瞬間」に達成率を再取得して玉数決定
@@ -6379,6 +6380,7 @@ async function submitAnswer(text, chosenBtnEl){
         isCorrect: isCorrectLocal,
         isFast: isCorrectLocal ? isFastAnswer : false,
       });
+      updatePre2BallsDuringQuiz();
     }
   }
 
@@ -6434,6 +6436,7 @@ async function submitAnswer(text, chosenBtnEl){
           isCorrect,
           isFast: isCorrect ? snapshot.isFastAnswer : false,
         });
+        updatePre2BallsDuringQuiz();
       }
 
       // ✅ 進捗更新は裏で（ただしpre2中の黒玉は更新しない）
@@ -7495,11 +7498,29 @@ function _tileByLesson(lesson){
 function getReviewRate01ForLesson(lesson){
   const t = _tileByLesson(lesson);
   const r = t?.stageStats?.pre2?.rate;
-  return (r != null) ? clamp(Number(r), 0, 1) : 0;
+  const savedRate = (r != null) ? clamp(Number(r), 0, 1) : 0;
+
+  // pre2の進行中は、習得できた単語の割合をその場で黒丸へ反映する。
+  if (CURRENT.stage !== "pre2" || !SESSION || normLesson(SESSION.lesson) !== normLesson(lesson)){
+    return savedRate;
+  }
+  const ids = Array.isArray(SESSION.wordIds) ? SESSION.wordIds : [];
+  if (!ids.length || !SESSION.wordStats) return savedRate;
+  const achieved = ids.filter((id)=> SESSION.wordStats.get(id)?.achieved).length;
+  return Math.max(savedRate, clamp(achieved / ids.length, 0, 1));
 }
 function getReviewBallCountForLesson(lesson){
   const r = getReviewRate01ForLesson(lesson);
   return clamp(Math.floor(r * 10 + 1e-9), 0, 10);
+}
+function updatePre2BallsDuringQuiz(){
+  if (CURRENT.stage !== "pre2" || !reviewBallSvg) return;
+  const key = `${CURRENT.name}|${SELECTED_GRADE}|${normLesson(CURRENT.lesson)}`;
+  const prev = _quizReviewBallPrev.get(key) ?? 0;
+  const next = getReviewBallCountForLesson(CURRENT.lesson);
+  if (next !== prev){
+    renderQuizReviewBalls(CURRENT.lesson, next > prev, prev);
+  }
 }
 function setReviewVisualMode(){
   const isReview = (CURRENT.stage === "pre2");
