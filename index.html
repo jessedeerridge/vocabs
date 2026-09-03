@@ -690,6 +690,7 @@ font-size: var(--reviewWordMaxPx);
 /* ✅ セッション結果モーダル：lowRateと同じ「内容に合わせて縮む」 */
 #sessionBack .modal{
   position:relative;
+  isolation:isolate;
 
   /* ✅ 中身に合わせて縮む（JSで最終確定） */
   width:auto;
@@ -706,6 +707,52 @@ font-size: var(--reviewWordMaxPx);
   box-shadow:0 24px 70px rgba(0,0,0,.35);
   padding:18px 16px 56px;
 }
+
+    .sessionSakuraLayer{
+      position:absolute;
+      inset:0;
+      z-index:0;
+      pointer-events:none;
+      overflow:visible;
+    }
+    .sessionSakura{
+      position:absolute;
+      left:var(--sakura-x);
+      top:var(--sakura-y);
+      font-size:var(--sakura-size);
+      line-height:1;
+      opacity:.16;
+      filter:saturate(.65);
+      transform:translate(-50%, -50%) rotate(var(--sakura-rotate));
+      user-select:none;
+    }
+    .sessionStudentName{
+      position:absolute;
+      top:8px;
+      right:12px;
+      z-index:2;
+      display:flex;
+      align-items:flex-start;
+      max-width:45%;
+      color:rgba(17,17,17,.58);
+      font-size:13px;
+      font-weight:800;
+      line-height:1.2;
+      white-space:nowrap;
+      overflow:hidden;
+      pointer-events:none;
+    }
+    #sessionBack .sessionCenter,
+    #sessionBack .sessionWrongList,
+    #sessionBack .sessionBackBtn{
+      position:relative;
+      z-index:1;
+    }
+    .sessionStudentName span{
+      display:inline-block;
+      transform:rotate(var(--name-tilt, 0deg));
+      transform-origin:50% 70%;
+    }
 
     .sessionCenter{
       text-align:center;
@@ -1674,6 +1721,8 @@ font-size: var(--reviewWordMaxPx);
 <!-- ✅ セッション結果モーダル（要求仕様版） -->
 <div class="modalBack" id="sessionBack" aria-label="session result">
   <div class="modal" role="dialog" aria-modal="true">
+    <div class="sessionSakuraLayer" id="sessionSakuraLayer" aria-hidden="true"></div>
+    <div class="sessionStudentName" id="sessionStudentName" aria-label="生徒名"></div>
     <div class="sessionCenter">
       <div class="line1">結果！</div>
       <div class="line2" id="sessionPct">--%</div>
@@ -3465,6 +3514,8 @@ const wrongList   = document.getElementById("wrongList");
 const btnSessionClose = document.getElementById("btnSessionClose");
 const sessionTitle = document.getElementById("sessionTitle");
 const sessionTitleText = document.getElementById("sessionTitleText");
+const sessionSakuraLayer = document.getElementById("sessionSakuraLayer");
+const sessionStudentName = document.getElementById("sessionStudentName");
 
 /* ✅ 所持アイテムDOM */
 const inventoryBack = document.getElementById("inventoryBack");
@@ -6403,6 +6454,8 @@ function pickFallbackWordId(excludeId){
 function openSessionResult(){
   if (!SESSION) return;
 
+  renderSessionDecorations();
+
   const stageWordCount = Math.max(1, SESSION.wordIds?.length || 0);
   const achievedCount = (SESSION.wordIds || []).reduce((sum, id)=>
     sum + (SESSION.wordStats?.get(id)?.achieved ? 1 : 0), 0);
@@ -6451,6 +6504,40 @@ function openSessionResult(){
   // モーダル表示
   sessionBack.style.display = "flex";
   requestAnimationFrame(fitSessionModalWidth);
+}
+
+function renderSessionDecorations(){
+  if (sessionSakuraLayer){
+    sessionSakuraLayer.replaceChildren();
+    const areas = [
+      { x:[-8, 8], y:[10, 35] },
+      { x:[92, 108], y:[20, 44] },
+      { x:[-7, 9], y:[65, 91] },
+      { x:[91, 107], y:[63, 90] },
+    ];
+    for (const area of areas){
+      const blossom = document.createElement("span");
+      blossom.className = "sessionSakura";
+      blossom.textContent = "🌸";
+      blossom.style.setProperty("--sakura-x", `${area.x[0] + Math.random() * (area.x[1] - area.x[0])}%`);
+      blossom.style.setProperty("--sakura-y", `${area.y[0] + Math.random() * (area.y[1] - area.y[0])}%`);
+      blossom.style.setProperty("--sakura-size", `${54 + Math.random() * 30}px`);
+      blossom.style.setProperty("--sakura-rotate", `${-22 + Math.random() * 44}deg`);
+      sessionSakuraLayer.appendChild(blossom);
+    }
+  }
+
+  if (sessionStudentName){
+    sessionStudentName.replaceChildren();
+    const name = String(CURRENT.name || "").trim();
+    sessionStudentName.setAttribute("aria-label", name ? `生徒名：${name}` : "生徒名");
+    for (const character of name){
+      const letter = document.createElement("span");
+      letter.textContent = character;
+      letter.style.setProperty("--name-tilt", `${(Math.random() * 2.2 - 1.1).toFixed(2)}deg`);
+      sessionStudentName.appendChild(letter);
+    }
+  }
 }
 
 /* ✅ 100%以外のときの「間違えたことば」リスト描画 */
