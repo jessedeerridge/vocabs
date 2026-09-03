@@ -1355,6 +1355,12 @@ font-size: var(--reviewWordMaxPx);
   color:#111;
   word-break:break-word;
 }
+#flashBack .flashMeaning ruby{ ruby-position:over; }
+#flashBack .flashMeaning rt{
+  font-size:11px;
+  font-weight:700;
+  color:#666;
+}
 #flashBack .flashWord{
   font-weight:900;
   font-size:17px;
@@ -1994,12 +2000,35 @@ function splitTextAndFurigana(raw){
   const before = String(match[1] ?? "");
   const reading = String(match[2] ?? "").trim();
   const after = String(match[3] ?? "");
-  const annotatedKanji = before.match(/^(.*?)(\p{Script=Han}+)$/u);
-  const readingPrefix = annotatedKanji ? annotatedKanji[1] : "";
   return {
     text: `${before}${after}`.trim() || source,
-    furigana: `${readingPrefix}${reading}${after}`.trim(),
+    furigana: reading,
   };
+}
+
+function renderTextWithFurigana(element, raw){
+  element.textContent = "";
+  const source = String(raw ?? "").trim();
+  const match = source.match(/^(.*?)[（(]([^（）()]+)[）)](.*)$/);
+  if (!match){
+    element.textContent = source;
+    return;
+  }
+
+  const before = String(match[1] ?? "");
+  const annotatedKanji = before.match(/^(.*?)(\p{Script=Han}+)$/u);
+  if (!annotatedKanji){
+    element.textContent = source;
+    return;
+  }
+
+  element.append(document.createTextNode(annotatedKanji[1]));
+  const ruby = document.createElement("ruby");
+  ruby.append(document.createTextNode(annotatedKanji[2]));
+  const rt = document.createElement("rt");
+  rt.textContent = String(match[2] ?? "").trim();
+  ruby.append(rt);
+  element.append(ruby, document.createTextNode(String(match[3] ?? "")));
 }
 
 const LESSON_CACHE_KEY = "yuko_wordlog_lesson_progress";
@@ -4607,8 +4636,8 @@ function renderFlashCard(){
       example.className = "flashExampleLine";
 
       if (entry){
-        meaning.textContent = entry.meaning || "";
-        furigana.textContent = entry.meaningFurigana || "";
+        renderTextWithFurigana(meaning, entry.meaningRaw || entry.meaning || "");
+        furigana.textContent = entry.meaningRaw ? "" : (entry.meaningFurigana || "");
         if (!furigana.textContent) furigana.classList.add("is-empty");
         word.textContent = getMemorizeModeWordDisplay(entry.word || "");
         const ex = String(entry.example ?? "").trim();
@@ -4735,7 +4764,7 @@ requestAnimationFrame(fitFlashModalWidth);
         const meaningFurigana = String(v.meaningFurigana || parsedMeaning.furigana || "").trim();
         if (!word || !meaning) continue;
 const example = String(v.example ?? "").trim(); // ✅追加（DBのexample）
-list.push({ word, meaning, meaningFurigana, example });
+list.push({ word, meaning, meaningRaw, meaningFurigana, example });
       }
     }
   }catch(e){
