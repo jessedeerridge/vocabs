@@ -1932,7 +1932,9 @@ const WORDS = Object.freeze({
         "建筑・建物（たてもの）・つくえ・かわ：",
         "生活・生活（せいかつ）・さんせい・たいど：",
         "不擅长・苦手（にがて）・ざんねん・とくい：",
-        "右边・右・みぎ・ひだり, まえ：右に曲がってください。（请向右转。）",
+        "右边・右（みぎ）・ひだり, まえ：右に曲がってください。（请向右转。）",
+        "客人・お客（きゃく）さん・みなさん, としょかん：お客さんがたくさん来ました。（来了很多客人。）",
+        "带路・案内（あんない）する・かんこうする・としょかん：みなさんを図書館に案内します。（带大家去图书馆。）",
       ],
       pre2: [],
       review: [],
@@ -1942,8 +1944,8 @@ const WORDS = Object.freeze({
 
 /*
  * 単語は次の1行形式で追加する（誤答は2個または3個）。
- *   問題・正解・フリガナ・誤答1, 誤答2[, 誤答3]：例文
- * 誤答の区切りは半角カンマだけ。「、」では区切らない。
+ *   問題・正解（フリガナ）・誤答1, 誤答2[, 誤答3]：例文
+ * 誤答は「・」または半角カンマで区切る。「、」では区切らない。
  * 既存データとの互換性のため、従来のオブジェクト形式も読み込める。
  */
 function parseWordEntry(entry, grade, lesson, stage, index){
@@ -1958,21 +1960,12 @@ function parseWordEntry(entry, grade, lesson, stage, index){
   const fields = fieldsText.split("・").map(text=>text.trim());
   if (fields.some(text=>!text)) return null;
 
-  let word;
-  let meaning;
-  let wrongs;
-  const isLegacyLine = (fields.length === 4 || fields.length === 5)
-    && /[（(][^（）()]+[）)]$/.test(fields[1]);
-  if (isLegacyLine){
-    [word, meaning, ...wrongs] = fields;
-  } else if (fields.length === 4){
-    const [question, answer, furigana, wrongsText] = fields;
-    word = question;
-    meaning = `${answer}（${furigana}）`;
-    wrongs = wrongsText.split(",").map(text=>text.trim()).filter(Boolean);
-  } else {
-    return null;
-  }
+  if (fields.length < 3) return null;
+  const [word, meaning, ...wrongFields] = fields;
+  const wrongs = wrongFields
+    .flatMap(text=>text.split(","))
+    .map(text=>text.trim())
+    .filter(Boolean);
   if (wrongs.length < 2 || wrongs.length > 3) return null;
 
   return {
