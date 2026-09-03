@@ -9,7 +9,7 @@
     *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
     header{position:sticky;top:0;z-index:5;background:rgba(246,247,251,.94);border-bottom:1px solid var(--line)}
     .wrap{max-width:1100px;margin:auto;padding:14px 16px}.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.space{flex:1}
-    h1{font-size:18px;margin:0} button,input{font:inherit} button{border:0;border-radius:11px;padding:10px 14px;background:var(--accent);color:#fff;font-weight:800;cursor:pointer}
+    h1{font-size:18px;margin:0} button,input,textarea{font:inherit} button{border:0;border-radius:11px;padding:10px 14px;background:var(--accent);color:#fff;font-weight:800;cursor:pointer}
     button.secondary{background:#fff;color:var(--text);border:1px solid var(--line)} button.active{background:#2563eb}
     main{max-width:1100px;margin:auto;padding:16px}.card{background:var(--card);border:1px solid var(--line);border-radius:16px;overflow:hidden}
     .cardHead{padding:14px;border-bottom:1px solid var(--line)}.cardBody{padding:14px}.muted{color:var(--muted);font-size:13px}
@@ -18,7 +18,7 @@
     tr.student{cursor:pointer}tr.student:hover{background:#f8fafc}.pct{font-weight:900}.good{color:#16803a}.mid{color:#b54708}.bad{color:#b42318}
     dialog{width:min(850px,calc(100% - 24px));border:1px solid var(--line);border-radius:16px;padding:0}dialog::backdrop{background:rgba(0,0,0,.45)}
     .login{position:fixed;inset:0;z-index:20;background:rgba(0,0,0,.46);display:grid;place-items:center;padding:16px}.loginCard{width:min(460px,100%);background:#fff;border-radius:16px;padding:18px}
-    label{display:block;font-size:13px;font-weight:800;margin:10px 0 5px}input{width:100%;padding:11px;border:1px solid var(--line);border-radius:10px}.error{color:var(--danger);min-height:20px}
+    label{display:block;font-size:13px;font-weight:800;margin:10px 0 5px}input,textarea{width:100%;padding:11px;border:1px solid var(--line);border-radius:10px;background:#fff}textarea{min-height:130px;resize:vertical;line-height:1.6}.error{color:var(--danger);min-height:20px}.importCard{margin-top:14px}.importActions{margin-top:10px}.success{color:#16803a;font-weight:800}
     @media(max-width:600px){th,td{padding:8px 6px;font-size:12px}}
   </style>
 </head>
@@ -31,27 +31,38 @@
         <div class="tableWrap"><table><thead><tr id="studentHead"></tr></thead><tbody id="students"></tbody></table></div>
       </div>
     </section>
+    <section class="card importCard"><div class="cardHead"><strong id="importTitle">Ⅰ 達成度入力</strong></div>
+      <div class="cardBody"><p class="muted">学生1人につき1行で、名前に続けて各課のpre1・pre2を順番に入力してください。最後の総達成度は省略でき、入力してもDBには各課の値から自動計算されます。</p><div id="importOrder" class="muted"></div>
+        <label for="bulkInput">達成度データ（複数行可）</label><textarea id="bulkInput" placeholder="王志豪・100%・100%・100%・100%・100%・100%・100%・100%・100%・100%・100%・100%・0%・0%・0%・0%・100%"></textarea>
+        <div class="row importActions"><button id="saveBulk" type="button">選択中のクラスへ書き込む</button><span id="importMessage" class="muted" role="status"></span></div>
+      </div>
+    </section>
   </main>
   <dialog id="detail"><div class="cardHead row"><strong id="detailTitle">学生詳細</strong><div class="space"></div><button id="closeDetail" class="secondary">閉じる</button></div><div class="cardBody tableWrap"><table><thead><tr><th>課</th><th>pre1</th><th>pre2</th></tr></thead><tbody id="lessonRows"></tbody></table></div></dialog>
   <div class="login" id="login"><form class="loginCard" id="loginForm"><h2>教師ログイン</h2><label for="email">メールアドレス</label><input id="email" type="email" autocomplete="username" required><label for="password">パスワード</label><input id="password" type="password" autocomplete="current-password" required><p class="error" id="loginError"></p><button type="submit">ログイン</button></form></div>
   <script type="module">
     import { initializeApp } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-app.js";
-    import { getDatabase, ref, get } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-database.js";
+    import { getDatabase, ref, get, update } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-database.js";
     import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-auth.js";
 
     const firebaseConfig={apiKey:"AIzaSyDEwJejLA1DnsoXVbCx_wfo3nmPtw5mbeQ",authDomain:"class-files-c5fef.firebaseapp.com",databaseURL:"https://class-files-c5fef-default-rtdb.firebaseio.com",projectId:"class-files-c5fef",storageBucket:"class-files-c5fef.firebasestorage.app",messagingSenderId:"373131822812",appId:"1:373131822812:web:f8bb96f3bb9cfe51f2d619"};
     const app=initializeApp(firebaseConfig),db=getDatabase(app),auth=getAuth(app);
     const COURSE=Object.freeze({1:{label:"Ⅰ",lessons:["1","2","3","4","5","6","7"]},2:{label:"Ⅱ",lessons:["8","9","10","11","12","13","14","15"]},3:{label:"Ⅲ",lessons:["1","2","3","4","5","6","7"]},4:{label:"Ⅳ",lessons:["8","9","10","11","12","13","14","15"]}});
     const $=id=>document.getElementById(id); const ADMIN_EMAIL_KEY="yuko_wordlog_admin_email";
-    const grades=$("grades"),title=$("title"),studentHead=$("studentHead"),students=$("students"),message=$("message"),detail=$("detail"),detailTitle=$("detailTitle"),lessonRows=$("lessonRows"),login=$("login"),loginForm=$("loginForm"),loginError=$("loginError"),email=$("email"),password=$("password"),logout=$("logout"),reload=$("reload"),closeDetail=$("closeDetail"),authState=$("authState");
+    const grades=$("grades"),title=$("title"),studentHead=$("studentHead"),students=$("students"),message=$("message"),detail=$("detail"),detailTitle=$("detailTitle"),lessonRows=$("lessonRows"),login=$("login"),loginForm=$("loginForm"),loginError=$("loginError"),email=$("email"),password=$("password"),logout=$("logout"),reload=$("reload"),closeDetail=$("closeDetail"),authState=$("authState"),importTitle=$("importTitle"),importOrder=$("importOrder"),bulkInput=$("bulkInput"),saveBulk=$("saveBulk"),importMessage=$("importMessage");
     let selectedGrade=1; let studentsRoot={}; let bestRoot={};
     const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+    const safeKey=s=>encodeURIComponent(String(s).trim()).replaceAll(".","%2E").replaceAll("#","%23").replaceAll("$","%24").replaceAll("[","%5B").replaceAll("]","%5D").replaceAll("/","%2F");
     const pct=n=>Number.isFinite(Number(n))?`${Math.round(Number(n))}%`:"--";
     const pctClass=n=>!Number.isFinite(Number(n))?"":Number(n)>=80?"good":Number(n)>=40?"mid":"bad";
     function stagePct(studentKey,lesson,stage){const value=bestRoot?.[studentKey]?.[selectedGrade]?.[lesson]?.[stage]?.bestPct;return Number.isFinite(Number(value))?Number(value):null}
     function lessonPct(studentKey,lesson){const p1=stagePct(studentKey,lesson,"pre1"),p2=stagePct(studentKey,lesson,"pre2");if(p1===null&&p2===null)return null;return ((p1||0)+(p2||0))/2}
     function totalPct(studentKey){const values=COURSE[selectedGrade].lessons.map(l=>lessonPct(studentKey,l));return values.reduce((sum,n)=>sum+(n||0),0)/COURSE[selectedGrade].lessons.length}
-    function renderGrades(){grades.innerHTML="";Object.entries(COURSE).forEach(([id,cfg])=>{const b=document.createElement("button");b.textContent=cfg.label;b.className=Number(id)===selectedGrade?"active":"";b.onclick=()=>{selectedGrade=Number(id);renderGrades();renderStudents()};grades.appendChild(b)})}
+    function renderGrades(){grades.innerHTML="";Object.entries(COURSE).forEach(([id,cfg])=>{const b=document.createElement("button");b.textContent=cfg.label;b.className=Number(id)===selectedGrade?"active":"";b.onclick=()=>{selectedGrade=Number(id);importMessage.textContent="";renderGrades();renderStudents();renderImportGuide()};grades.appendChild(b)})}
+    function renderImportGuide(){const cfg=COURSE[selectedGrade];importTitle.textContent=`${cfg.label} 達成度入力`;importOrder.textContent=`入力順: 名前・${cfg.lessons.flatMap(l=>[`${l}課pre1`,`${l}課pre2`]).join("・")}・総達成度（任意）`}
+    function parsePercent(raw){const text=String(raw??"").trim().replace(/[％%]$/,"").trim();if(!/^\d+(?:\.\d+)?$/.test(text))return null;const value=Number(text);return Number.isFinite(value)&&value>=0&&value<=100?value:null}
+    function parseImportLine(line,lineNumber){const parts=String(line).split("・").map(v=>v.trim());const lessons=COURSE[selectedGrade].lessons,required=lessons.length*2;if(parts.length!==required+1&&parts.length!==required+2)throw new Error(`${lineNumber}行目: 名前の後に達成度を${required}個${parts.length===required+2?"":"（総達成度を含める場合は最後に1個追加）"}入力してください。`);const name=parts.shift();if(!name)throw new Error(`${lineNumber}行目: 名前を入力してください。`);const values=parts.splice(0,required).map((v,i)=>{const parsed=parsePercent(v);if(parsed===null)throw new Error(`${lineNumber}行目: ${i+1}番目の達成度「${v}」は0〜100%で入力してください。`);return parsed});if(parts.length&&parsePercent(parts[0])===null)throw new Error(`${lineNumber}行目: 総達成度は0〜100%で入力してください。`);return{name,values}}
+    async function saveBulkProgress(){importMessage.className="muted";importMessage.textContent="入力内容を確認しています…";const lines=bulkInput.value.split(/\r?\n/).map(v=>v.trim()).filter(Boolean);if(!lines.length){importMessage.textContent="データを1行以上入力してください。";return}let rows;try{rows=lines.map((line,i)=>parseImportLine(line,i+1))}catch(e){importMessage.textContent=e.message;return}const now=Date.now(),patch={};for(const row of rows){const studentKey=`name_${safeKey(row.name)}`;patch[`students/${studentKey}/studentKey`]=studentKey;patch[`students/${studentKey}/name`]=row.name;patch[`students/${studentKey}/lastGrade`]=selectedGrade;patch[`students/${studentKey}/lastSeenAt`]=now;COURSE[selectedGrade].lessons.forEach((lesson,i)=>["pre1","pre2"].forEach((stage,j)=>{const base=`bestProgress/${studentKey}/${selectedGrade}/${lesson}/${stage}`,value=row.values[i*2+j];patch[`${base}/bestPct`]=value;patch[`${base}/bestAt`]=now;patch[`${base}/lastPct`]=value;patch[`${base}/lastAt`]=now}))}saveBulk.disabled=true;importMessage.textContent="DBへ書き込み中…";try{await update(ref(db),patch);importMessage.className="success";importMessage.textContent=`${rows.length}人分をクラス${COURSE[selectedGrade].label}へ書き込みました。`;await loadStudents()}catch(e){importMessage.className="error";importMessage.textContent=`書き込み失敗: ${e.message}`}finally{saveBulk.disabled=false}}
     function renderStudents(){title.textContent=`${COURSE[selectedGrade].label} 学生一覧`;students.innerHTML="";studentHead.innerHTML=`<th class="left">学生</th>${COURSE[selectedGrade].lessons.map(l=>`<th>${l}課</th>`).join("")}<th>総達成度</th>`;const list=Object.entries(studentsRoot).filter(([key,s])=>bestRoot?.[key]?.[selectedGrade]||Number(s?.lastGrade)===selectedGrade).sort((a,b)=>totalPct(b[0])-totalPct(a[0])||String(a[1]?.name||a[0]).localeCompare(String(b[1]?.name||b[0]),"ja"));
       for(const [key,s] of list){const lessonCells=COURSE[selectedGrade].lessons.map(l=>{const value=lessonPct(key,l);return `<td class="pct ${pctClass(value)}">${pct(value)}</td>`}).join("");const total=totalPct(key),tr=document.createElement("tr");tr.className="student";tr.innerHTML=`<td class="left">${esc(s?.name||key)}</td>${lessonCells}<td class="pct ${pctClass(total)}">${pct(total)}</td>`;tr.onclick=()=>showDetail(key,s);students.appendChild(tr)}
       message.textContent=list.length?`${list.length}人を表示しています。`:"この学年の学生データはありません。"}
@@ -59,9 +70,9 @@
     async function loadStudents(){message.textContent="読み込み中…";try{const [studentsSnap,bestSnap]=await Promise.all([get(ref(db,"students")),get(ref(db,"bestProgress"))]);studentsRoot=studentsSnap.exists()?studentsSnap.val():{};bestRoot=bestSnap.exists()?bestSnap.val():{};renderStudents()}catch(e){message.textContent=`読み込み失敗: ${e.message}`}}
     email.value=localStorage.getItem(ADMIN_EMAIL_KEY)||"";
     loginForm.onsubmit=async e=>{e.preventDefault();loginError.textContent="";const loginName=email.value.trim();localStorage.setItem(ADMIN_EMAIL_KEY,loginName);try{await signInWithEmailAndPassword(auth,loginName,password.value)}catch(err){loginError.textContent="ログインできませんでした。"}};
-    logout.onclick=()=>signOut(auth);reload.onclick=loadStudents;closeDetail.onclick=()=>detail.close();
+    logout.onclick=()=>signOut(auth);reload.onclick=loadStudents;closeDetail.onclick=()=>detail.close();saveBulk.onclick=saveBulkProgress;
     onAuthStateChanged(auth,user=>{login.style.display=user?"none":"grid";logout.hidden=!user;authState.textContent=user?user.email:"未ログイン";if(user)loadStudents();else{studentsRoot={};bestRoot={};renderStudents()}});
-    renderGrades();renderStudents();
+    renderGrades();renderStudents();renderImportGuide();
   </script>
 </body>
 </html>
