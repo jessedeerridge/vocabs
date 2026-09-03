@@ -721,7 +721,7 @@ font-size: var(--reviewWordMaxPx);
       top:var(--sakura-y);
       font-size:var(--sakura-size);
       line-height:1;
-      opacity:.16;
+      opacity:.26;
       filter:saturate(.65);
       transform:translate(-50%, -50%) rotate(var(--sakura-rotate));
       user-select:none;
@@ -743,11 +743,11 @@ font-size: var(--reviewWordMaxPx);
       pointer-events:none;
     }
     #sessionBack .sessionCenter,
-    #sessionBack .sessionWrongList,
-    #sessionBack .sessionBackBtn{
+    #sessionBack .sessionWrongList{
       position:relative;
       z-index:1;
     }
+    #sessionBack .sessionBackBtn{ z-index:1; }
     .sessionStudentName span{
       display:inline-block;
       transform:rotate(var(--name-tilt, 0deg));
@@ -6510,10 +6510,11 @@ function renderSessionDecorations(){
   if (sessionSakuraLayer){
     sessionSakuraLayer.replaceChildren();
     const areas = [
-      { x:[-8, 8], y:[10, 35] },
-      { x:[92, 108], y:[20, 44] },
-      { x:[-7, 9], y:[65, 91] },
-      { x:[91, 107], y:[63, 90] },
+      // 右上の1輪は、生徒名の背後に必ず少し重なる範囲に置く。
+      { x:[84, 96], y:[-1, 11] },
+      { x:[-10, 7], y:[17, 43] },
+      { x:[-8, 10], y:[66, 94] },
+      { x:[91, 109], y:[58, 89] },
     ];
     for (const area of areas){
       const blossom = document.createElement("span");
@@ -6521,7 +6522,7 @@ function renderSessionDecorations(){
       blossom.textContent = "🌸";
       blossom.style.setProperty("--sakura-x", `${area.x[0] + Math.random() * (area.x[1] - area.x[0])}%`);
       blossom.style.setProperty("--sakura-y", `${area.y[0] + Math.random() * (area.y[1] - area.y[0])}%`);
-      blossom.style.setProperty("--sakura-size", `${54 + Math.random() * 30}px`);
+      blossom.style.setProperty("--sakura-size", `${82 + Math.random() * 40}px`);
       blossom.style.setProperty("--sakura-rotate", `${-22 + Math.random() * 44}deg`);
       sessionSakuraLayer.appendChild(blossom);
     }
