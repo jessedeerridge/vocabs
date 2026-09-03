@@ -1977,6 +1977,24 @@ function parseWordEntry(entry, grade, lesson, stage, index){
   };
 }
 
+function splitTextAndFurigana(raw){
+  const source = String(raw ?? "").trim();
+  if (!source) return { text:"", furigana:"" };
+
+  const match = source.match(/^(.*?)[（(]([^（）()]+)[）)](.*)$/);
+  if (!match) return { text:source, furigana:"" };
+
+  const before = String(match[1] ?? "");
+  const reading = String(match[2] ?? "").trim();
+  const after = String(match[3] ?? "");
+  const annotatedKanji = before.match(/^(.*?)(\p{Script=Han}+)$/u);
+  const readingPrefix = annotatedKanji ? annotatedKanji[1] : "";
+  return {
+    text: `${before}${after}`.trim() || source,
+    furigana: `${readingPrefix}${reading}${after}`.trim(),
+  };
+}
+
 const LESSON_CACHE_KEY = "yuko_wordlog_lesson_progress";
 
 function getEmbeddedStageWords(grade, lesson, stage){
@@ -3945,16 +3963,6 @@ async function ensureStagePool(grade, lesson, stage){
 
   const words = [];
 
-  function splitTextAndFurigana(raw){
-    const s = String(raw||"").trim();
-    if (!s) return { text:"", furigana:"" };
-    const m = s.match(/^(.*?)[（(]([^（）()]+)[）)]\s*$/);
-    if (!m) return { text:s, furigana:"" };
-    const text = String(m[1]||"").trim();
-    const furigana = String(m[2]||"").trim();
-    return { text: text || s, furigana };
-  }
-
   function normalizeWrongsAndFurigana(wrongs, rawMap={}){
     const map = (rawMap && typeof rawMap === "object") ? rawMap : {};
     const outWrongs = [];
@@ -4715,9 +4723,9 @@ requestAnimationFrame(fitFlashModalWidth);
         if (!v || typeof v !== "object") continue;
         const word = String(v.word ?? "").trim();
         const meaningRaw = String(v.meaning ?? "").trim();
-        const m = meaningRaw.match(/^(.*?)[（(]([^（）()]+)[）)]\s*$/);
-        const meaning = (m ? String(m[1]||"") : meaningRaw).trim();
-        const meaningFurigana = String(v.meaningFurigana || (m ? String(m[2]||"") : "") || "").trim();
+        const parsedMeaning = splitTextAndFurigana(meaningRaw);
+        const meaning = parsedMeaning.text;
+        const meaningFurigana = String(v.meaningFurigana || parsedMeaning.furigana || "").trim();
         if (!word || !meaning) continue;
 const example = String(v.example ?? "").trim(); // ✅追加（DBのexample）
 list.push({ word, meaning, meaningFurigana, example });
