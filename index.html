@@ -1928,10 +1928,13 @@ const WORDS = Object.freeze({
   1: {
     "1": {
       pre1: [
-        { id:"i-1-01", word:"洗澡", meaning:"おふろ", wrongs:["ところ","くもり"], example:"" },
-        { id:"i-1-02", word:"建筑", meaning:"たてもの", wrongs:["つくえ","かわ"], example:"" },
-        { id:"i-1-03", word:"生活", meaning:"せいかつ", wrongs:["さんせい","たいど"], example:"" },
-        { id:"i-1-04", word:"不擅长", meaning:"にがて", wrongs:["ざんねん","とくい"], example:"" },
+        "洗澡・お風呂（おふろ）・ところ・くもり：",
+        "建筑・建物（たてもの）・つくえ・かわ：",
+        "生活・生活（せいかつ）・さんせい・たいど：",
+        "不擅长・苦手（にがて）・ざんねん・とくい：",
+        "右边・右（みぎ）・ひだり, まえ：右に曲がってください。（请向右转。）",
+        "客人・お客（きゃく）さん・みなさん, としょかん：お客さんがたくさん来ました。（来了很多客人。）",
+        "带路・案内（あんない）する・かんこうする・としょかん：みなさんを図書館に案内します。（带大家去图书馆。）",
       ],
       pre2: [],
       review: [],
@@ -1939,15 +1942,73 @@ const WORDS = Object.freeze({
   },
 });
 
+/*
+ * 単語は次の1行形式で追加する（誤答は2個または3個）。
+ *   問題・正解（フリガナ）・誤答1, 誤答2[, 誤答3]：例文
+ * 誤答は「・」または半角カンマで区切る。「、」では区切らない。
+ * 既存データとの互換性のため、従来のオブジェクト形式も読み込める。
+ */
+function parseWordEntry(entry, grade, lesson, stage, index){
+  if (entry && typeof entry === "object") return entry;
+
+  const source = String(entry ?? "").trim();
+  if (!source) return null;
+
+  const separatorAt = source.search(/[：:]/);
+  const fieldsText = separatorAt < 0 ? source : source.slice(0, separatorAt);
+  const example = separatorAt < 0 ? "" : source.slice(separatorAt + 1).trim();
+  const fields = fieldsText.split("・").map(text=>text.trim());
+  if (fields.some(text=>!text)) return null;
+
+  if (fields.length < 3) return null;
+  const [word, meaning, ...wrongFields] = fields;
+  const wrongs = wrongFields
+    .flatMap(text=>text.split(","))
+    .map(text=>text.trim())
+    .filter(Boolean);
+  if (wrongs.length < 2 || wrongs.length > 3) return null;
+
+  return {
+    id: `i-${lesson}-${String(index + 1).padStart(2, "0")}`,
+    word,
+    meaning,
+    wrongs,
+    example,
+  };
+}
+
+function splitTextAndFurigana(raw){
+  const source = String(raw ?? "").trim();
+  if (!source) return { text:"", furigana:"" };
+
+  const match = source.match(/^(.*?)[（(]([^（）()]+)[）)](.*)$/);
+  if (!match) return { text:source, furigana:"" };
+
+  const before = String(match[1] ?? "");
+  const reading = String(match[2] ?? "").trim();
+  const after = String(match[3] ?? "");
+  const annotatedKanji = before.match(/^(.*?)(\p{Script=Han}+)$/u);
+  const readingPrefix = annotatedKanji ? annotatedKanji[1] : "";
+  return {
+    text: `${before}${after}`.trim() || source,
+    furigana: `${readingPrefix}${reading}${after}`.trim(),
+  };
+}
+
 const LESSON_CACHE_KEY = "yuko_wordlog_lesson_progress";
 
 function getEmbeddedStageWords(grade, lesson, stage){
   const lessonData = WORDS[Number(grade)]?.[String(lesson)] || {};
+  let entries;
   if (stage === "review"){
     const explicit = lessonData.review || [];
-    return explicit.length ? explicit : [...(lessonData.pre1 || []), ...(lessonData.pre2 || [])];
+    entries = explicit.length ? explicit : [...(lessonData.pre1 || []), ...(lessonData.pre2 || [])];
+  } else {
+    entries = lessonData[stage] || [];
   }
-  return lessonData[stage] || [];
+  return entries
+    .map((entry, index)=>parseWordEntry(entry, grade, lesson, stage, index))
+    .filter(Boolean);
 }
 function readLessonCache(){
   try{ return JSON.parse(localStorage.getItem(LESSON_CACHE_KEY) || "{}") || {}; }
@@ -3902,16 +3963,6 @@ async function ensureStagePool(grade, lesson, stage){
 
   const words = [];
 
-  function splitTextAndFurigana(raw){
-    const s = String(raw||"").trim();
-    if (!s) return { text:"", furigana:"" };
-    const m = s.match(/^(.*?)[（(]([^（）()]+)[）)]\s*$/);
-    if (!m) return { text:s, furigana:"" };
-    const text = String(m[1]||"").trim();
-    const furigana = String(m[2]||"").trim();
-    return { text: text || s, furigana };
-  }
-
   function normalizeWrongsAndFurigana(wrongs, rawMap={}){
     const map = (rawMap && typeof rawMap === "object") ? rawMap : {};
     const outWrongs = [];
@@ -4672,9 +4723,9 @@ requestAnimationFrame(fitFlashModalWidth);
         if (!v || typeof v !== "object") continue;
         const word = String(v.word ?? "").trim();
         const meaningRaw = String(v.meaning ?? "").trim();
-        const m = meaningRaw.match(/^(.*?)[（(]([^（）()]+)[）)]\s*$/);
-        const meaning = (m ? String(m[1]||"") : meaningRaw).trim();
-        const meaningFurigana = String(v.meaningFurigana || (m ? String(m[2]||"") : "") || "").trim();
+        const parsedMeaning = splitTextAndFurigana(meaningRaw);
+        const meaning = parsedMeaning.text;
+        const meaningFurigana = String(v.meaningFurigana || parsedMeaning.furigana || "").trim();
         if (!word || !meaning) continue;
 const example = String(v.example ?? "").trim(); // ✅追加（DBのexample）
 list.push({ word, meaning, meaningFurigana, example });
