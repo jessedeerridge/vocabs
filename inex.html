@@ -1981,11 +1981,54 @@ function setCachedStageProgress(studentKey, grade, lesson, stage, words){
   mergeCacheNode([studentKey, String(grade), "progress", String(lesson)], { [String(stage)]:words });
 }
 
+function comparableName(value){
+  return String(value || "").normalize("NFKC").trim().toLocaleLowerCase("ja");
+}
+async function resolveStudentKeyBeforeSync(fallbackKey){
+  const name = normName(CURRENT.name || stuName.value);
+  if (!name) return fallbackKey;
+  let resolvedKey = fallbackKey;
+  try{
+    const allStudents = await dbGet("students", {timeoutMs:1200,retries:0}) || {};
+    const match = Object.entries(allStudents).find(([, value])=>
+      comparableName(value?.name) === comparableName(name)
+    );
+    if (match) resolvedKey = match[0];
+  }catch(e){}
+
+  if (resolvedKey !== fallbackKey){
+    const root = readLessonCache();
+    const destination = root[resolvedKey] || {};
+    for (const [grade, sourceGrade] of Object.entries(root[fallbackKey] || {})){
+      const targetGrade = destination[grade] || {};
+      destination[grade] = {
+        ...targetGrade,
+        ...sourceGrade,
+        progress:{ ...(targetGrade.progress || {}), ...(sourceGrade.progress || {}) },
+        best:{ ...(targetGrade.best || {}), ...(sourceGrade.best || {}) },
+        done:{ ...(targetGrade.done || {}), ...(sourceGrade.done || {}) }
+      };
+    }
+    root[resolvedKey] = destination;
+    delete root[fallbackKey];
+    writeLessonCache(root);
+    STUDENT.studentKey = resolvedKey;
+  }
+  await dbUpdate(P.students(resolvedKey), {
+    studentKey:resolvedKey,
+    name,
+    lastGrade:SELECTED_GRADE,
+    lastSeenAt:nowTs()
+  });
+  return resolvedKey;
+}
+
 /* オフライン中に端末へ保存した進捗を、ホーム表示のたびにDBへ再送する。 */
 async function syncCachedProgressToDb(studentKey){
   if (!studentKey) return false;
   try{
     await ensureFirebaseReady();
+    studentKey = await resolveStudentKeyBeforeSync(studentKey);
     let studentCache = getCacheNode([studentKey]);
     /* 同名で別端末から接続した場合はDB側も取り込み、端末側を優先して統合する。 */
     for (const grade of Object.keys(COURSE)){
