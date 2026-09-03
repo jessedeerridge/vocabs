@@ -93,7 +93,8 @@
       font-weight:700;
     }
     .firebase-control button{
-      width:32px;
+      width:auto;
+      min-width:48px;
       height:32px;
       padding:0;
       border-radius:8px;
@@ -1555,8 +1556,8 @@ font-size: var(--reviewWordMaxPx);
 
 <body>
 <div class="firebase-control" aria-label="Firebase接続状態">
-  <button id="firebaseDisconnect" type="button" aria-describedby="firebaseConnectionStatus">D</button>
-  <span id="firebaseConnectionStatus" role="status" aria-live="polite">接続中</span>
+  <button id="firebaseDisconnect" type="button" aria-describedby="firebaseConnectionStatus" aria-pressed="false">接続</button>
+  <span id="firebaseConnectionStatus" role="status" aria-live="polite">非接続</span>
 </div>
 <main>
   <section id="studentSec">
@@ -1766,9 +1767,11 @@ const firebaseConfig = {
   measurementId: "G-5KP73MM8T9"};
 
 let db = null;
-let ref, get, set, update, runTransaction, goOffline;
+let ref, get, set, update, runTransaction, goOffline, goOnline;
 let _firebaseLoadPromise = null;
+let DB_CONNECTION_ENABLED = false;
 function ensureFirebaseReady(){
+  if (!DB_CONNECTION_ENABLED) return Promise.reject(new Error("db_connection_disabled"));
   if (db) return Promise.resolve(db);
   if (_firebaseLoadPromise) return _firebaseLoadPromise;
   _firebaseLoadPromise = Promise.all([
@@ -1776,7 +1779,7 @@ function ensureFirebaseReady(){
     import("https://www.gstatic.com/firebasejs/9.23.0/firebase-database.js")
   ]).then(([appApi, dbApi])=>{
     const app = appApi.initializeApp(firebaseConfig);
-    ({ ref, get, set, update, runTransaction, goOffline } = dbApi);
+    ({ ref, get, set, update, runTransaction, goOffline, goOnline } = dbApi);
     db = dbApi.getDatabase(app);
     firebaseConnectionStatus.textContent = "接続可能";
     return db;
@@ -1790,11 +1793,24 @@ function ensureFirebaseReady(){
 
 const firebaseDisconnect = document.getElementById("firebaseDisconnect");
 const firebaseConnectionStatus = document.getElementById("firebaseConnectionStatus");
-firebaseDisconnect.addEventListener("click", ()=>{
-  if (db && goOffline) goOffline(db);
-  firebaseConnectionStatus.textContent = "遮断中";
-  firebaseDisconnect.disabled = true;
-  firebaseDisconnect.setAttribute("aria-pressed", "true");
+firebaseDisconnect.addEventListener("click", async ()=>{
+  DB_CONNECTION_ENABLED = !DB_CONNECTION_ENABLED;
+  firebaseDisconnect.setAttribute("aria-pressed", String(DB_CONNECTION_ENABLED));
+  firebaseDisconnect.textContent = DB_CONNECTION_ENABLED ? "切断" : "接続";
+  if (!DB_CONNECTION_ENABLED){
+    if (db && goOffline) goOffline(db);
+    firebaseConnectionStatus.textContent = "非接続";
+    return;
+  }
+  firebaseConnectionStatus.textContent = "接続中…";
+  try{
+    await ensureFirebaseReady();
+    if (db && goOnline) goOnline(db);
+    await syncCachedProgressToDb(STUDENT.studentKey);
+    if (IN_ROOM) await refreshLessons();
+  }catch(e){
+    firebaseConnectionStatus.textContent = "接続失敗（端末保存）";
+  }
 });
 
 function delay(ms){
@@ -1970,7 +1986,24 @@ async function syncCachedProgressToDb(studentKey){
   if (!studentKey) return false;
   try{
     await ensureFirebaseReady();
-    const studentCache = getCacheNode([studentKey]);
+    let studentCache = getCacheNode([studentKey]);
+    /* 同名で別端末から接続した場合はDB側も取り込み、端末側を優先して統合する。 */
+    for (const grade of Object.keys(COURSE)){
+      const localGrade = studentCache[grade] || {};
+      try{
+        const [remoteProgress, remoteBest, remoteDone] = await Promise.all([
+          dbGet(`progress/${studentKey}/${grade}`, {timeoutMs:1200,retries:0}),
+          dbGet(`bestProgress/${studentKey}/${grade}`, {timeoutMs:1200,retries:0}),
+          dbGet(`lessonProgress/${studentKey}/${grade}`, {timeoutMs:1200,retries:0})
+        ]);
+        mergeCacheNode([studentKey, grade], {
+          progress:{ ...(remoteProgress || {}), ...(localGrade.progress || {}) },
+          best:{ ...(remoteBest || {}), ...(localGrade.best || {}) },
+          done:{ ...(remoteDone || {}), ...(localGrade.done || {}) }
+        });
+      }catch(e){}
+    }
+    studentCache = getCacheNode([studentKey]);
     const writes = [];
     for (const [grade, gradeCache] of Object.entries(studentCache)){
       if (!COURSE[Number(grade)] || !gradeCache || typeof gradeCache !== "object") continue;
@@ -3718,10 +3751,12 @@ async function enterStudent(name){
   const path = P.students(sk);
   const now = nowTs();
   let existing = null;
-  try{
-    existing = await dbGet(path, { timeoutMs:800, retries:0 });
-  }catch(e){
-    existing = null;
+  if (DB_CONNECTION_ENABLED){
+    try{
+      existing = await dbGet(path, { timeoutMs:800, retries:0 });
+    }catch(e){
+      existing = null;
+    }
   }
 
   /* 入室はネットワークを待たない。オンラインなら背景で同期する。 */
@@ -3861,22 +3896,14 @@ async function apiLessons(name, grade){
     const sk = STUDENT.studentKey;
     const g = Number(grade)||1;
 
-    await dbUpdate(P.students(sk), { lastGrade:g, lastSeenAt: nowTs() }).catch(()=>{});
+    dbUpdate(P.students(sk), { lastGrade:g, lastSeenAt: nowTs() }).catch(()=>{});
 
     const lessons = COURSE[g]?.lessons || [];
     const localGrade = getCacheNode([sk, String(g)]);
-    let remoteBest = {}, remoteProgress = {}, remoteDone = {};
-    try{
-      [remoteBest, remoteProgress, remoteDone] = await Promise.all([
-        dbGet(`bestProgress/${sk}/${g}`, {timeoutMs:800,retries:0}),
-        dbGet(`progress/${sk}/${g}`, {timeoutMs:800,retries:0}),
-        dbGet(`lessonProgress/${sk}/${g}`, {timeoutMs:800,retries:0})
-      ]);
-    }catch(e){}
-    const bG = { ...(localGrade.best || {}), ...(remoteBest || {}) };
-    const pG = { ...(localGrade.progress || {}), ...(remoteProgress || {}) };
-    const dG = { ...(localGrade.done || {}), ...(remoteDone || {}) };
-    mergeCacheNode([sk, String(g)], { best:bG, progress:pG, done:dG });
+    /* 課一覧は必ず本体と端末キャッシュだけで即時生成する。DBを待たない。 */
+    const bG = localGrade.best || {};
+    const pG = localGrade.progress || {};
+    const dG = localGrade.done || {};
 
 function calc(lesson, stage){
   const stageObj = getEmbeddedStageWords(g, lesson, stage);
@@ -4940,6 +4967,11 @@ async function finalizeReviewBallsAndShowResult(){
 /* ========= 画面表示 ========= */
 function showNameScreen(){
   IN_ROOM = false;
+
+  /* 接続を有効にしている場合は、トップへ戻った時にも再接続・再送する。 */
+  if (DB_CONNECTION_ENABLED && STUDENT.studentKey){
+    syncCachedProgressToDb(STUDENT.studentKey);
+  }
 
   studentTop.style.display = "";
   lessonListBox.style.display = "none";
