@@ -79,7 +79,7 @@
     .firebase-control{
       position:fixed;
       top:max(8px, env(safe-area-inset-top, 0px));
-      left:max(8px, env(safe-area-inset-left, 0px));
+      right:max(8px, env(safe-area-inset-right, 0px));
       z-index:10000;
       display:flex;
       align-items:center;
@@ -101,6 +101,10 @@
       font-weight:900;
     }
     .firebase-control button:disabled{ opacity:.55; cursor:default; }
+    .firebase-connection-indicator{
+      font-size:18px;
+      line-height:1;
+    }
     .card{background:#fff;border:1px solid #eee;border-radius:14px;padding:14px;margin:12px 0}
     .muted{opacity:.7;font-size:13px}
     .ok{color:#0a7a2f}
@@ -1562,6 +1566,7 @@ font-size: var(--reviewWordMaxPx);
 <body>
 <div class="firebase-control" aria-label="Firebase接続状態">
   <button id="firebaseDisconnect" type="button" aria-describedby="firebaseConnectionStatus" aria-pressed="false">接続</button>
+  <span id="firebaseConnectionIndicator" class="firebase-connection-indicator" aria-hidden="true">⚪</span>
   <span id="firebaseConnectionStatus" role="status" aria-live="polite">非接続</span>
 </div>
 <main>
@@ -1772,6 +1777,14 @@ let db = null;
 let ref, get, set, update, runTransaction, goOffline, goOnline;
 let _firebaseLoadPromise = null;
 let DB_CONNECTION_ENABLED = false;
+let DB_CONNECTED_SINCE_HOME = false;
+function setDbConnectionIndicator(connected){
+  DB_CONNECTED_SINCE_HOME = Boolean(connected);
+  firebaseConnectionIndicator.textContent = DB_CONNECTED_SINCE_HOME ? "⚫" : "⚪";
+  firebaseConnectionIndicator.title = DB_CONNECTED_SINCE_HOME
+    ? "ホームに戻ってからDB接続に成功"
+    : "DB非接続中";
+}
 function ensureFirebaseReady(){
   if (!DB_CONNECTION_ENABLED) return Promise.reject(new Error("db_connection_disabled"));
   if (db) return Promise.resolve(db);
@@ -1794,6 +1807,7 @@ function ensureFirebaseReady(){
 }
 
 const firebaseDisconnect = document.getElementById("firebaseDisconnect");
+const firebaseConnectionIndicator = document.getElementById("firebaseConnectionIndicator");
 const firebaseConnectionStatus = document.getElementById("firebaseConnectionStatus");
 firebaseDisconnect.addEventListener("click", async ()=>{
   DB_CONNECTION_ENABLED = !DB_CONNECTION_ENABLED;
@@ -1801,6 +1815,7 @@ firebaseDisconnect.addEventListener("click", async ()=>{
   firebaseDisconnect.textContent = DB_CONNECTION_ENABLED ? "切断" : "接続";
   if (!DB_CONNECTION_ENABLED){
     if (db && goOffline) goOffline(db);
+    setDbConnectionIndicator(false);
     firebaseConnectionStatus.textContent = "非接続";
     return;
   }
@@ -1833,6 +1848,7 @@ async function dbGet(path, options={}){
         get(ref(db, path)),
         new Promise((_, reject)=> setTimeout(()=> reject(new Error("db_get_timeout")), timeoutMs))
       ]);
+      setDbConnectionIndicator(true);
       return snap.exists() ? snap.val() : null;
     }catch(e){
       lastError = e;
@@ -1847,10 +1863,12 @@ async function dbGet(path, options={}){
 async function dbSet(path, value){
   await ensureFirebaseReady();
   await set(ref(db, path), value);
+  setDbConnectionIndicator(true);
 }
 async function dbUpdate(path, patch){
   await ensureFirebaseReady();
   await update(ref(db, path), patch);
+  setDbConnectionIndicator(true);
 }
 
 function nowTs(){ return Date.now(); }
@@ -2773,6 +2791,7 @@ async function syncCachedProgressToDb(studentKey){
       );
     }
     await Promise.all(writes);
+    setDbConnectionIndicator(true);
     firebaseConnectionStatus.textContent = "同期済み";
     return true;
   }catch(e){
@@ -3418,6 +3437,7 @@ async function updateAsaViaTransaction(modifier){
     next.updatedAt = nowTs();
     return next;
   });
+  setDbConnectionIndicator(true);
   applyAsaState(res?.snapshot?.val());
 }
 async function addAsaPoints(n){
@@ -4819,7 +4839,7 @@ async function apiAnswer(name, word_id, chosen){
       base.lastChosen = c;
       base.lastCorrect = correct;
       return base;
-    }).catch(()=>{});
+    }).then(()=>setDbConnectionIndicator(true)).catch(()=>{});
 
     return { ok:true, is_correct, correct, chosen: c };
   }catch(e){
@@ -4884,7 +4904,7 @@ async function apiSaveBestStage(name, grade, lesson, stage, pct){
         base.bestAt = now;
       }
       return base;
-    }).catch(()=>{});
+    }).then(()=>setDbConnectionIndicator(true)).catch(()=>{});
 
     return { ok:true };
   }catch(e){
@@ -5706,6 +5726,7 @@ async function finalizeReviewBallsAndShowResult(){
 /* ========= 画面表示 ========= */
 function showNameScreen(){
   IN_ROOM = false;
+  setDbConnectionIndicator(false);
 
   /* 接続を有効にしている場合は、トップへ戻った時にも再接続・再送する。 */
   if (DB_CONNECTION_ENABLED && STUDENT.studentKey){
