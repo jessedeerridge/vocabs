@@ -370,7 +370,7 @@
       z-index:1;
     }
 
-    /* ✅ reviewクイズ用：画面下に溜まる黒丸レイヤー */
+    /* ✅ pre2クイズ用：画面下に溜まる黒丸レイヤー */
     .reviewBallSvg{
       position:absolute;
       inset:0;
@@ -584,7 +584,6 @@ font-size: var(--reviewWordMaxPx);
     .stagePop .sbtn:hover{ border-color:#999; }
     .stagePop .sbtn.pre1{ background:#f6f8ff; }
     .stagePop .sbtn.pre2{ background:#f6fff8; }
-    .stagePop .sbtn.review{ background:#fff7f6; }
     .stagePop .sbtn:disabled{ opacity:.35; cursor:default; }
 
     .sbtn .label{
@@ -1594,7 +1593,7 @@ font-size: var(--reviewWordMaxPx);
         <svg class="lesson-svg" id="lessonSvg" aria-label="lesson menu"></svg>
 
 
-        <!-- ✅ 予習復習選択ポップ（縦並び） -->
+        <!-- 単語ステージ選択ポップ（縦並び） -->
         <div class="stagePop" id="stagePop" aria-label="stage chooser">
           <div class="title" id="stagePopTitle">課</div>
           <div class="btnRow">
@@ -1603,12 +1602,9 @@ font-size: var(--reviewWordMaxPx);
               <span class="progress" id="stagePre1Progress">--%</span>
             </button>
             <button class="sbtn pre2"   id="btnStagePre2"   type="button">
-              <span class="label">単語2 <span class="icon">🥛</span></span>
-              <span class="progress" id="stagePre2Progress">--%</span>
-            </button>
-            <button class="sbtn review" id="btnStageReview" type="button">
-              <span class="label">復習</span>
+              <span class="label">単語2</span>
               <span class="dots5" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
+              <span class="progress" id="stagePre2Progress">--%</span>
             </button>
           </div>
         </div>
@@ -1634,7 +1630,7 @@ font-size: var(--reviewWordMaxPx);
         <div class="quiz-stage" id="quizStage" aria-label="quiz stage">
           <svg class="quizProgressSvg" id="quizProgressSvg" aria-hidden="true"></svg>
 
-          <!-- ✅ reviewクイズ：黒丸が溜まるレイヤー -->
+          <!-- ✅ pre2クイズ：黒丸が溜まるレイヤー -->
           <svg class="reviewBallSvg" id="reviewBallSvg" aria-hidden="true"></svg>
 
           <div class="dropletLayer" id="dropletLayer" aria-hidden="true"></div>
@@ -2034,13 +2030,7 @@ const LESSON_CACHE_KEY = "yuko_wordlog_lesson_progress";
 
 function getEmbeddedStageWords(grade, lesson, stage){
   const lessonData = WORDS[Number(grade)]?.[String(lesson)] || {};
-  let entries;
-  if (stage === "review"){
-    const explicit = lessonData.review || [];
-    entries = explicit.length ? explicit : [...(lessonData.pre1 || []), ...(lessonData.pre2 || [])];
-  } else {
-    entries = lessonData[stage] || [];
-  }
+  const entries = lessonData[stage] || [];
   return entries
     .map((entry, index)=>parseWordEntry(entry, grade, lesson, stage, index))
     .filter(Boolean);
@@ -2679,7 +2669,6 @@ const stagePop = document.getElementById("stagePop");
 const stagePopTitle = document.getElementById("stagePopTitle");
 const btnStagePre1 = document.getElementById("btnStagePre1");
 const btnStagePre2 = document.getElementById("btnStagePre2");
-const btnStageReview = document.getElementById("btnStageReview");
 const stagePre1Progress = document.getElementById("stagePre1Progress");
 const stagePre2Progress = document.getElementById("stagePre2Progress");
 
@@ -4145,32 +4134,18 @@ function calc(lesson, stage){
     const outLessons = lessons.map(lesson=>{
       const pre1 = calc(lesson,"pre1");
       const pre2 = calc(lesson,"pre2");
-      const review = calc(lesson,"review");
 
-// ✅ pre1/pre2 の合算で課の達成度にする
-const m1 = Number.isFinite(pre1.mastered) ? pre1.mastered : null;
-const m2 = Number.isFinite(pre2.mastered) ? pre2.mastered : null;
-const t1 = Number.isFinite(pre1.total) ? pre1.total : null;
-const t2 = Number.isFinite(pre2.total) ? pre2.total : null;
-let achieveRate = null;
-if (Number.isFinite(m1) && Number.isFinite(m2) && Number.isFinite(t1) && Number.isFinite(t2) && (t1 + t2) > 0){
-  achieveRate = clamp((m1 + m2) / (t1 + t2), 0, 1);
-} else {
-  const r1 = (pre1.rate != null) ? pre1.rate : 0;
-  const r2 = (pre2.rate != null) ? pre2.rate : 0;
-  achieveRate = clamp((r1 + r2) / 2, 0, 1);
-}
+// ジュースの目盛りは単語1（pre1）だけで0〜100%まで表示する。
+const achieveRate = pre1.rate != null ? clamp(pre1.rate, 0, 1) : 0;
       const done = dG[lesson] || {};
       const stage_status = {
         pre1: { completed_at: done.pre1?.completedAt || null },
         pre2: { completed_at: done.pre2?.completedAt || null },
-        review:{ completed_at: done.review?.completedAt || null },
       };
 
       const stage_rates = {
         pre1: { rate: pre1.rate, mastered: pre1.mastered, total: pre1.total },
         pre2: { rate: pre2.rate, mastered: pre2.mastered, total: pre2.total },
-        review:{ rate: review.rate, mastered: review.mastered, total: review.total },
       };
 
       return { lesson, achieveRate, stage_status, stage_rates };
@@ -4914,17 +4889,17 @@ btnLowRateMem.onclick = async ()=>{
 
 
 /* =========================
-   ✅ 変更点（review黒玉の挙動）
+   ✅ 変更点（pre2黒玉の挙動）
 ========================= */
 let QUIZ_REVIEW_BALLS_FROZEN = false;     // クイズ中フリーズ
 let QUIZ_REVIEW_BALLS_START_COUNT = 0;    // 開始時の玉数
 let QUIZ_REVIEW_FINALIZING = false;       // 二重実行防止
 
 function isQuizVisible(){ return quizBox && quizBox.style.display !== "none"; }
-function isReviewNow(){ return (CURRENT.stage === "review"); }
+function isPre2Now(){ return (CURRENT.stage === "pre2"); }
 
 function freezeReviewBallsStart(){
-  if (!isReviewNow()) return;
+  if (!isPre2Now()) return;
   QUIZ_REVIEW_BALLS_FROZEN = true;
   QUIZ_REVIEW_FINALIZING = false;
 
@@ -4990,8 +4965,8 @@ window.addEventListener("resize", ()=>{
   if (flashBack && flashBack.style.display === "flex"){
     requestAnimationFrame(fitFlashModalWidth);
   }
-  // ✅ review表示の追従（縮小＆例文位置）
-  if (quizBox && quizBox.style.display !== "none" && CURRENT.stage === "review"){
+  // ✅ pre2表示の追従（縮小＆例文位置）
+  if (quizBox && quizBox.style.display !== "none" && CURRENT.stage === "pre2"){
     requestAnimationFrame(applyReviewPromptLayout);
   }
   if (lessonListBox && lessonListBox.style.display !== "none"){
@@ -5079,7 +5054,7 @@ const targets = [flashList, flashPager].filter(Boolean);
 
 
 /* =========================
-   ✅ review結果表示待ち（落下完了→2秒）
+   ✅ pre2結果表示待ち（落下完了→2秒）
 ========================= */
 let _reviewFinalizeToken = 0;
 let _reviewResultTimer = null;
@@ -5098,7 +5073,7 @@ function scheduleOpenSessionResultAfterReviewBalls(prevCount, nextCount){
   const stillValid = ()=>{
     if (token !== _reviewFinalizeToken) return false;
     if (!SESSION) return false;
-    if (CURRENT.stage !== "review") return false;
+    if (CURRENT.stage !== "pre2") return false;
     if (!quizBox || quizBox.style.display === "none") return false;
     return true;
   };
@@ -5140,7 +5115,7 @@ function scheduleOpenSessionResultAfterReviewBalls(prevCount, nextCount){
 }
 
 async function finalizeReviewBallsAndShowResult(){
-  if (!isReviewNow()) { openSessionResult(); return; }
+  if (!isPre2Now()) { openSessionResult(); return; }
   if (QUIZ_REVIEW_FINALIZING) return;
   QUIZ_REVIEW_FINALIZING = true;
 
@@ -5149,12 +5124,13 @@ async function finalizeReviewBallsAndShowResult(){
   // フリーズ解除（ここから先は更新OK）
   QUIZ_REVIEW_BALLS_FROZEN = false;
 
-  const prev = QUIZ_REVIEW_BALLS_START_COUNT;
+  const key = `${CURRENT.name}|${SELECTED_GRADE}|${normLesson(CURRENT.lesson)}`;
+  const prev = _quizReviewBallPrev.get(key) ?? QUIZ_REVIEW_BALLS_START_COUNT;
   const lesson = CURRENT.lesson;
 
   // 「最後の問題が終わった瞬間」に達成率を再取得して玉数決定
   try{
-    await refreshLessons(); // DBの最新を読み、review%を確定
+    await refreshLessons(); // DBの最新を読み、pre2%を確定
   }catch(e){}
 
   const next = getReviewBallCountForLesson(lesson);
@@ -5200,7 +5176,7 @@ function showNameScreen(){
   QUIZ_REVIEW_BALLS_FROZEN = false;
   QUIZ_REVIEW_FINALIZING = false;
 
-  // ✅ review結果待ちキャンセル
+  // ✅ pre2結果待ちキャンセル
   clearReviewResultWait();
 }
 
@@ -5247,7 +5223,7 @@ async function showLessonList(){
   QUIZ_REVIEW_BALLS_FROZEN = false;
   QUIZ_REVIEW_FINALIZING = false;
 
-  // ✅ review結果待ちキャンセル
+  // ✅ pre2結果待ちキャンセル
   clearReviewResultWait();
 }
 
@@ -5276,8 +5252,8 @@ function showQuiz(){
 
   setReviewVisualMode();
 
-  // ✅ reviewなら「開始時点の玉数」で静止表示（クイズ中に落とさない）
-  if (CURRENT.stage === "review"){
+  // ✅ pre2なら「開始時点の玉数」で静止表示（クイズ中に落とさない）
+  if (CURRENT.stage === "pre2"){
     const key = `${CURRENT.name}|${SELECTED_GRADE}|${normLesson(CURRENT.lesson)}`;
     const prev = _quizReviewBallPrev.get(key) ?? getReviewBallCountForLesson(CURRENT.lesson);
     renderQuizReviewBalls(CURRENT.lesson, false, prev);
@@ -5297,7 +5273,7 @@ backFab.onclick = async ()=>{
   closeSessionResult();
   closeLowRatePop();
 
-  // ✅ review結果待ちキャンセル
+  // ✅ pre2結果待ちキャンセル
   clearReviewResultWait();
 
   if (quizBox.style.display !== "none"){
@@ -5443,8 +5419,8 @@ async function refreshLessons(){
   drawLessonTrapezoids(true); /* ✅ 戻った時は“伸び”アニメ */
   syncDropletColorToGauge();
 
-  // ✅ reviewクイズ中は黒玉を「更新しない」
-  if (isQuizVisible() && CURRENT.stage === "review"){
+  // ✅ pre2クイズ中は黒玉を「更新しない」
+  if (isQuizVisible() && CURRENT.stage === "pre2"){
     if (!QUIZ_REVIEW_BALLS_FROZEN && !QUIZ_REVIEW_FINALIZING){
       const key = `${CURRENT.name}|${SELECTED_GRADE}|${normLesson(CURRENT.lesson)}`;
       const prev = _quizReviewBallPrev.get(key) ?? getReviewBallCountForLesson(CURRENT.lesson);
@@ -5844,7 +5820,7 @@ const REVIEW_OPTION_MIN_PX = 12;
 function applyReviewOptionLayout(){
   if (!optGrid) return;
 
-  const isReview = (CURRENT.stage === "review");
+  const isReview = (CURRENT.stage === "pre2");
   const btns = [...optGrid.querySelectorAll(".optBtn")];
   if (!btns.length) return;
 
@@ -5892,7 +5868,7 @@ function positionQuizExampleUnderWord(){
 function applyReviewPromptLayout(){
   if (!quizWord) return;
 
-  const isReview = (CURRENT.stage === "review");
+  const isReview = (CURRENT.stage === "pre2");
 
   // reset
   quizWord.classList.toggle("oneLine", isReview);
@@ -5970,16 +5946,14 @@ function openStagePop(lesson, meta, anchorX, anchorY){
   _pendingLesson = lesson;
   _pendingLessonMeta = meta || null;
   stagePopTitle.textContent = `${gradeLabel(SELECTED_GRADE)} / ${lesson}`;
-  const hasInfo = !!(meta && meta.stageDone && (meta.stageDone.pre1 || meta.stageDone.pre2 || meta.stageDone.review));
+  const hasInfo = !!(meta && meta.stageDone && (meta.stageDone.pre1 || meta.stageDone.pre2));
   const pre1Done = hasInfo ? !!meta.stageDone.pre1 : null;
-  const pre2Done = hasInfo ? !!meta.stageDone.pre2 : null;
 
   if (stagePre1Progress) stagePre1Progress.textContent = formatStageProgressText(meta, "pre1");
   if (stagePre2Progress) stagePre2Progress.textContent = formatStageProgressText(meta, "pre2");
 
   btnStagePre1.disabled = false;
   btnStagePre2.disabled = (hasInfo ? !pre1Done : false);
-  btnStageReview.disabled = (hasInfo ? !pre2Done : false);
 
   const rect = lessonList.getBoundingClientRect();
   let x = anchorX;
@@ -6022,8 +5996,8 @@ function startStageCore(stage, metaOverride=null, lessonOverride=null){
 
   startSession(CURRENT.lesson, CURRENT.stage, meta || null);
 
-  // ✅ reviewなら「開始時点で玉数固定（フリーズ開始）」
-  if (stage === "review"){
+  // ✅ pre2なら「開始時点で玉数固定（フリーズ開始）」
+  if (stage === "pre2"){
     freezeReviewBallsStart();
   } else {
     QUIZ_REVIEW_BALLS_FROZEN = false;
@@ -6044,7 +6018,6 @@ function startStageCore(stage, metaOverride=null, lessonOverride=null){
 async function startStage(stage){
   if (!_pendingLesson) return;
   if (stage === "pre2" && btnStagePre2.disabled) return;
-  if (stage === "review" && btnStageReview.disabled) return;
 
   // ✅ pre1/pre2 は常に lowRateポップを表示
   if (stage === "pre1" || stage === "pre2"){
@@ -6062,7 +6035,6 @@ async function startStage(stage){
 
 btnStagePre1.onclick = ()=> startStage("pre1");
 btnStagePre2.onclick = ()=> startStage("pre2");
-btnStageReview.onclick = ()=> startStage("review");
 
 lessonListBox.addEventListener("pointerdown", (e)=>{
   if (stagePop.style.display === "block" && !stagePop.contains(e.target)){
@@ -6263,8 +6235,8 @@ function renderQuestionJson(j){
 
     stopQuestionTimer();
 
-    // ✅ reviewは「最後の瞬間に達成率→玉落下」してから、落下完了+2秒で結果
-    if (CURRENT.stage === "review"){
+    // ✅ pre2は「最後の瞬間に達成率→玉落下」してから、落下完了+2秒で結果
+    if (CURRENT.stage === "pre2"){
       finalizeReviewBallsAndShowResult();
       return;
     }
@@ -6298,7 +6270,7 @@ quizWord.textContent = word || "（no word）";
 markWordShown(wordId);
 if (SESSION) SESSION.lastWordId = wordId;
 
-// ✅ reviewのとき：改行しない＆自動縮小＆例文表示
+// ✅ pre2のとき：改行しない＆自動縮小＆例文表示
 requestAnimationFrame(applyReviewPromptLayout);
 
   const st = j.stage || CURRENT.stage;
@@ -6373,8 +6345,8 @@ async function submitAnswer(text, chosenBtnEl){
         if (b.textContent === correctLocal) b.classList.add("goodGreen");
       });
 
-      // ✅ review中は💧を出さない（黒丸は「最後だけ落とす」）
-      if (CURRENT.stage !== "review"){
+      // ✅ pre2中は💧を出さない（黒丸は「最後だけ落とす」）
+      if (CURRENT.stage !== "pre2"){
         spawnDroplets();
       }
     } else {
@@ -6408,6 +6380,7 @@ async function submitAnswer(text, chosenBtnEl){
         isCorrect: isCorrectLocal,
         isFast: isCorrectLocal ? isFastAnswer : false,
       });
+      updatePre2BallsDuringQuiz();
     }
   }
 
@@ -6433,7 +6406,7 @@ async function submitAnswer(text, chosenBtnEl){
   setTimeout(()=>{
     ANSWERING = false;
     if (doneNow){
-      if (CURRENT.stage === "review"){
+      if (CURRENT.stage === "pre2"){
         finalizeReviewBallsAndShowResult();
       } else {
         openSessionResult();
@@ -6463,9 +6436,10 @@ async function submitAnswer(text, chosenBtnEl){
           isCorrect,
           isFast: isCorrect ? snapshot.isFastAnswer : false,
         });
+        updatePre2BallsDuringQuiz();
       }
 
-      // ✅ 進捗更新は裏で（ただしreview中の黒玉は更新しない）
+      // ✅ 進捗更新は裏で（ただしpre2中の黒玉は更新しない）
       defer(async ()=>{
         try{
           const stillSame = (CURRENT.name === snapshot.name);
@@ -6713,7 +6687,7 @@ function ensureWaveLoop(){
 }
 
 /* =========================
-   ✅ review(復習) 10%ごとに黒丸を溜める（課選択側）
+   ✅ pre2 10%ごとに黒丸を溜める（課選択側）
    ※ここは元のまま
 ========================= */
 let _reviewBallPrevCount = new Map();
@@ -6721,7 +6695,7 @@ let _reviewBallInitDone  = false;
 let _reviewBallOffsets   = new Map();
 
 function getReviewRate01(tile){
-  const r = tile?.stageStats?.review?.rate;
+  const r = tile?.stageStats?.pre2?.rate;
   return (r != null) ? clamp(Number(r), 0, 1) : 0;
 }
 function getReviewBallCount(tile){
@@ -7109,7 +7083,7 @@ function drawLessonTrapezoids(animateLevels=true){
         gWave.appendChild(wavePath);
       }
 
-      /* ✅ review黒丸（台形内） */
+      /* ✅ pre2黒丸（台形内） */
       const ballCount = getReviewBallCount(t);
       const prevCount = _reviewBallPrevCount.get(lessonKey) ?? 0;
 
@@ -7383,7 +7357,7 @@ window.addEventListener("resize", scheduleCharaItemsRender);
 window.addEventListener("resize", ()=>requestAnimationFrame(applyReviewOptionLayout));
 
 
-/* ========= ★ クイズ全体：pre1+pre2 波ゲージ ========= */
+/* ========= ★ クイズ全体：pre1 ジュースゲージ ========= */
 function getCurrentLessonSumRate01(){
   const lesson = normLesson(CURRENT.lesson);
   if (!lesson) return 0;
@@ -7391,7 +7365,7 @@ function getCurrentLessonSumRate01(){
   const t = (_lastLessonTiles || []).find(x => normLesson(x.lesson) === lesson);
   if (!t || !t.stageStats) return 0;
 
-  const r = t.stageStats.sum_pre1_pre2?.rate;
+  const r = t.stageStats.pre1?.rate;
   return (r != null) ? clamp(r, 0, 1) : 0;
 }
 
@@ -7512,7 +7486,7 @@ function spawnDroplets(){
 }
 
 /* =========================
-   ✅ reviewクイズ：10%ごとに黒丸（画面下に溜める）
+   ✅ pre2クイズ：10%ごとに黒丸（画面下に溜める）
 ========================= */
 const _quizReviewBallOffsets = new Map();
 const _quizReviewBallPrev    = new Map();
@@ -7523,15 +7497,33 @@ function _tileByLesson(lesson){
 }
 function getReviewRate01ForLesson(lesson){
   const t = _tileByLesson(lesson);
-  const r = t?.stageStats?.review?.rate;
-  return (r != null) ? clamp(Number(r), 0, 1) : 0;
+  const r = t?.stageStats?.pre2?.rate;
+  const savedRate = (r != null) ? clamp(Number(r), 0, 1) : 0;
+
+  // pre2の進行中は、習得できた単語の割合をその場で黒丸へ反映する。
+  if (CURRENT.stage !== "pre2" || !SESSION || normLesson(SESSION.lesson) !== normLesson(lesson)){
+    return savedRate;
+  }
+  const ids = Array.isArray(SESSION.wordIds) ? SESSION.wordIds : [];
+  if (!ids.length || !SESSION.wordStats) return savedRate;
+  const achieved = ids.filter((id)=> SESSION.wordStats.get(id)?.achieved).length;
+  return Math.max(savedRate, clamp(achieved / ids.length, 0, 1));
 }
 function getReviewBallCountForLesson(lesson){
   const r = getReviewRate01ForLesson(lesson);
   return clamp(Math.floor(r * 10 + 1e-9), 0, 10);
 }
+function updatePre2BallsDuringQuiz(){
+  if (CURRENT.stage !== "pre2" || !reviewBallSvg) return;
+  const key = `${CURRENT.name}|${SELECTED_GRADE}|${normLesson(CURRENT.lesson)}`;
+  const prev = _quizReviewBallPrev.get(key) ?? 0;
+  const next = getReviewBallCountForLesson(CURRENT.lesson);
+  if (next !== prev){
+    renderQuizReviewBalls(CURRENT.lesson, next > prev, prev);
+  }
+}
 function setReviewVisualMode(){
-  const isReview = (CURRENT.stage === "review");
+  const isReview = (CURRENT.stage === "pre2");
   if (dropletLayer) dropletLayer.style.display = isReview ? "none" : "";
   if (reviewBallSvg) reviewBallSvg.style.display = isReview ? "" : "none";
 }
@@ -7566,7 +7558,7 @@ function _getQuizBallLayout(){
 
 function renderQuizReviewBalls(lesson, animateFromPrev=false, prevCount=0){
   if (!reviewBallSvg) return;
-  if (CURRENT.stage !== "review") return;
+  if (CURRENT.stage !== "pre2") return;
 
   const key = `${CURRENT.name}|${SELECTED_GRADE}|${normLesson(lesson)}`;
   const count = getReviewBallCountForLesson(lesson);
