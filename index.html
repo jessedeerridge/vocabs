@@ -464,6 +464,39 @@ font-size: var(--reviewWordMaxPx);
       z-index:3;
     }
 
+    .speechControl{
+      position:absolute;
+      left:12px;
+      top:12px;
+      z-index:5;
+      display:flex;
+      align-items:center;
+      gap:7px;
+      max-width:calc(100% - 78px);
+      padding:7px 10px;
+      border:1px solid rgba(0,0,0,.16);
+      border-radius:999px;
+      background:rgba(255,255,255,.88);
+      color:#222;
+      box-shadow:0 4px 14px rgba(0,0,0,.12);
+      font-size:12px;
+      font-weight:800;
+      cursor:pointer;
+    }
+    .speechControl .speechDot{
+      width:9px;
+      height:9px;
+      flex:0 0 9px;
+      border-radius:50%;
+      background:#8c95a3;
+    }
+    .speechControl.is-listening .speechDot{
+      background:#e02020;
+      animation:speechPulse .9s ease-in-out infinite;
+    }
+    .speechControl.is-error .speechDot{ background:#d47b00; }
+    @keyframes speechPulse{ 50%{ transform:scale(1.45); opacity:.55; } }
+
     .optBtn{
       width:100%;
       padding:14px 14px;
@@ -1656,6 +1689,10 @@ font-size: var(--reviewWordMaxPx);
           <svg class="reviewBallSvg" id="reviewBallSvg" aria-hidden="true"></svg>
 
           <div class="dropletLayer" id="dropletLayer" aria-hidden="true"></div>
+          <button class="speechControl" id="speechControl" type="button" aria-live="polite">
+            <span class="speechDot" aria-hidden="true"></span>
+            <span id="speechStatus">マイクを準備中</span>
+          </button>
           <div class="quizCenterWord" id="quizWord"></div>
 <div class="quizExample" id="quizExample" style="display:none"></div>
           <div class="quizOptions" id="optGrid"></div>
@@ -3450,6 +3487,8 @@ const quizStage = document.getElementById("quizStage");
 const quizProgressSvg = document.getElementById("quizProgressSvg");
 const reviewBallSvg = document.getElementById("reviewBallSvg");
 const dropletLayer = document.getElementById("dropletLayer");
+const speechControl = document.getElementById("speechControl");
+const speechStatus = document.getElementById("speechStatus");
 
 const gradeFab = document.getElementById("gradeFab");
 const backFab = document.getElementById("backFab");
@@ -5909,6 +5948,8 @@ async function finalizeReviewBallsAndShowResult(){
 /* ========= 画面表示 ========= */
 function showNameScreen(){
   IN_ROOM = false;
+  stopSpeechRecognition();
+  SPEECH.enabled = false;
 
   /* 接続を有効にしている場合は、トップへ戻った時にも再接続・再送する。 */
   if (DB_CONNECTION_ENABLED && STUDENT.studentKey){
@@ -5947,6 +5988,8 @@ function showNameScreen(){
 
 async function showLessonList(){
   IN_ROOM = true;
+  stopSpeechRecognition();
+  SPEECH.enabled = false;
   startDbActivitySession();
 
   /* 入室時・クイズから戻った時のどちらも接続とキャッシュ同期を再試行する。 */
@@ -6426,6 +6469,8 @@ function pickFallbackWordId(excludeId){
 
 function openSessionResult(){
   if (!SESSION) return;
+  stopSpeechRecognition();
+  SPEECH.enabled = false;
 
   const pct = Math.round(getSessionAchievementRate() * 100);
 
@@ -6768,7 +6813,7 @@ function openStagePop(lesson, meta, anchorX, anchorY){
 }
 
 /* ✅ 開始処理の“本体”（閾値チェックなし） */
-function startStageCore(stage, metaOverride=null, lessonOverride=null){
+async function startStageCore(stage, metaOverride=null, lessonOverride=null){
   const meta = metaOverride ?? _pendingLessonMeta;
   const lesson = normLesson(lessonOverride ?? _pendingLesson);
 
@@ -6797,6 +6842,8 @@ function startStageCore(stage, metaOverride=null, lessonOverride=null){
   }
 
   showQuiz();
+  // ステージ開始のユーザー操作中に許可を要求する。認識言語は常に日本語。
+  await enableSpeechForStage();
   syncDropletColorToGauge();
 
   setReviewVisualMode();
@@ -6846,6 +6893,176 @@ let _qtStart = 0;
 let _qtActive = false;
 let _questionShownAt = 0;
 
+/* ========= 音声回答（外部SDKを使わないためGFW環境でもページ自体は完結） ========= */
+const NativeSpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition || null;
+const NativeSpeechGrammarList = window.SpeechGrammarList || window.webkitSpeechGrammarList || null;
+const SPEECH = {
+  recognition: null,
+  enabled: false,
+  permissionGranted: false,
+  listening: false,
+  questionId: "",
+  restartTimer: null,
+};
+
+function setSpeechStatus(text, state=""){
+  if (!speechControl || !speechStatus) return;
+  speechStatus.textContent = text;
+  speechControl.classList.toggle("is-listening", state === "listening");
+  speechControl.classList.toggle("is-error", state === "error");
+}
+
+function normalizeJapaneseSpeech(value){
+  return String(value ?? "")
+    .normalize("NFKC")
+    .toLocaleLowerCase("ja-JP")
+    .replace(/[ァ-ヶ]/g, ch=>String.fromCharCode(ch.charCodeAt(0) - 0x60))
+    .replace(/[\s\p{P}\p{S}ー]/gu, "");
+}
+
+function speechEditDistance(a, b){
+  if (!a.length) return b.length;
+  if (!b.length) return a.length;
+  let previous = Array.from({length:b.length + 1}, (_, i)=>i);
+  for (let i=1; i<=a.length; i++){
+    const current = [i];
+    for (let j=1; j<=b.length; j++){
+      current[j] = Math.min(
+        current[j - 1] + 1,
+        previous[j] + 1,
+        previous[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1)
+      );
+    }
+    previous = current;
+  }
+  return previous[b.length];
+}
+
+function closestSpokenOption(transcripts, options){
+  let best = null;
+  for (const rawTranscript of transcripts){
+    const heard = normalizeJapaneseSpeech(rawTranscript);
+    if (!heard) continue;
+    for (const option of options){
+      const candidate = normalizeJapaneseSpeech(option);
+      if (!candidate) continue;
+      const distance = speechEditDistance(heard, candidate);
+      const similarity = 1 - (distance / Math.max(heard.length, candidate.length));
+      const containmentBonus = heard.includes(candidate) || candidate.includes(heard) ? .15 : 0;
+      const score = similarity + containmentBonus;
+      if (!best || score > best.score) best = { option, score, heard:rawTranscript };
+    }
+  }
+  return best;
+}
+
+function stopSpeechRecognition(){
+  clearTimeout(SPEECH.restartTimer);
+  SPEECH.restartTimer = null;
+  SPEECH.listening = false;
+  if (SPEECH.recognition){
+    try{ SPEECH.recognition.abort(); }catch(_){ }
+  }
+}
+
+function scheduleSpeechRestart(){
+  clearTimeout(SPEECH.restartTimer);
+  if (!SPEECH.enabled || ANSWERING || !CURRENT.currentQ || !isQuizVisible()) return;
+  SPEECH.restartTimer = setTimeout(()=>startSpeechForQuestion(), 180);
+}
+
+function getSpeechRecognition(){
+  if (SPEECH.recognition || !NativeSpeechRecognition) return SPEECH.recognition;
+  const recognition = new NativeSpeechRecognition();
+  recognition.lang = "ja-JP";
+  recognition.continuous = false;
+  recognition.interimResults = false;
+  recognition.maxAlternatives = 5;
+  recognition.onstart = ()=>{
+    SPEECH.listening = true;
+    setSpeechStatus("日本語を話してください", "listening");
+  };
+  recognition.onresult = event=>{
+    const alternatives = [];
+    for (let i=event.resultIndex; i<event.results.length; i++){
+      for (let j=0; j<event.results[i].length; j++) alternatives.push(event.results[i][j].transcript);
+    }
+    const buttons = [...optGrid.querySelectorAll(".optBtn:not(:disabled)")];
+    const match = closestSpokenOption(alternatives, buttons.map(button=>button.textContent));
+    if (!match || ANSWERING || SPEECH.questionId !== String(CURRENT.currentQ?.word_id ?? "")) return;
+    const button = buttons.find(entry=>entry.textContent === match.option);
+    setSpeechStatus(`「${match.heard}」→ ${match.option}`);
+    if (button) submitAnswer(match.option, button);
+  };
+  recognition.onerror = event=>{
+    SPEECH.listening = false;
+    if (event.error === "no-speech" || event.error === "aborted") return;
+    const denied = event.error === "not-allowed" || event.error === "service-not-allowed";
+    if (denied) SPEECH.enabled = false;
+    setSpeechStatus(denied ? "マイクを許可して再タップ" : "音声認識を再試行", "error");
+  };
+  recognition.onend = ()=>{
+    SPEECH.listening = false;
+    scheduleSpeechRestart();
+  };
+  SPEECH.recognition = recognition;
+  return recognition;
+}
+
+async function enableSpeechForStage(){
+  SPEECH.enabled = true;
+  if (!NativeSpeechRecognition){
+    setSpeechStatus("このブラウザは音声認識非対応", "error");
+    return false;
+  }
+  setSpeechStatus("マイクの許可を確認中");
+  try{
+    if (!SPEECH.permissionGranted){
+      if (!navigator.mediaDevices?.getUserMedia) throw new Error("media_devices_unavailable");
+      const stream = await navigator.mediaDevices.getUserMedia({audio:true});
+      stream.getTracks().forEach(track=>track.stop());
+      SPEECH.permissionGranted = true;
+    }
+    setSpeechStatus("マイク準備完了");
+    startSpeechForQuestion();
+    return true;
+  }catch(_){
+    SPEECH.enabled = false;
+    setSpeechStatus("マイクを許可して再タップ", "error");
+    return false;
+  }
+}
+
+function startSpeechForQuestion(){
+  if (!SPEECH.enabled || !SPEECH.permissionGranted || ANSWERING || !CURRENT.currentQ || !isQuizVisible()) return;
+  const recognition = getSpeechRecognition();
+  if (!recognition || SPEECH.listening) return;
+  if (NativeSpeechGrammarList){
+    const choices = [...optGrid.querySelectorAll(".optBtn")]
+      .map(button=>normalizeJapaneseSpeech(button.textContent))
+      .filter(Boolean)
+      .map(value=>value.replace(/[;|=]/g, ""));
+    if (choices.length){
+      const grammars = new NativeSpeechGrammarList();
+      grammars.addFromString(`#JSGF V1.0; grammar choices; public <choice> = ${choices.join(" | ")} ;`, 1);
+      recognition.grammars = grammars;
+    }
+  }
+  SPEECH.questionId = String(CURRENT.currentQ.word_id ?? "");
+  try{ recognition.start(); }
+  catch(_){ scheduleSpeechRestart(); }
+}
+
+speechControl?.addEventListener("click", ()=>{
+  if (SPEECH.enabled && SPEECH.permissionGranted){
+    stopSpeechRecognition();
+    SPEECH.enabled = false;
+    setSpeechStatus("音声回答オフ（タップで再開）");
+  }else{
+    enableSpeechForStage();
+  }
+});
+
 function initCircle(){
   const r = 18;
   const c = 2 * Math.PI * r;
@@ -6883,6 +7100,7 @@ function startQuestionTimer(ms){
 
 function handleQuestionTimeout(){
   if (ANSWERING) return;
+  stopSpeechRecognition();
   if (!CURRENT.currentQ) {
     nextQuestionFast(true);
     return;
@@ -7021,6 +7239,7 @@ function renderQuestionJson(j){
   setReviewVisualMode();
 
   if (j && (j.error === "session_done" || j.error === "no_more_unique")){
+    stopSpeechRecognition();
     clearOptions();
     quizWord.textContent = "おつかれさま！";
     quizExample.style.display = "none";
@@ -7092,6 +7311,7 @@ requestAnimationFrame(applyReviewPromptLayout);
   requestAnimationFrame(applyReviewOptionLayout);
   _questionShownAt = performance.now();
   startQuestionTimer(QT_MS);
+  startSpeechForQuestion();
 }
 
 async function loadQuestion(){
@@ -7113,6 +7333,7 @@ async function submitAnswer(text, chosenBtnEl){
   if (sessionBack.style.display === "flex") return;
 
   ANSWERING = true;
+  stopSpeechRecognition();
   stopQuestionTimer();
   resetPrefetch();
 
