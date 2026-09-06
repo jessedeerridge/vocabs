@@ -704,8 +704,22 @@ font-size: var(--reviewWordMaxPx);
   border-radius:18px;
   border:1px solid #eee;
   box-shadow:0 24px 70px rgba(0,0,0,.35);
-  padding:18px 16px 56px;
+  padding:58px 16px 56px;
 }
+
+    .sessionMeta{
+      position:absolute;
+      top:14px;
+      right:16px;
+      max-width:calc(100% - 32px);
+      color:#111;
+      font-size:14px;
+      font-weight:900;
+      line-height:1.35;
+      text-align:right;
+      white-space:pre-line;
+      overflow-wrap:anywhere;
+    }
 
     .sessionCenter{
       text-align:center;
@@ -1674,6 +1688,7 @@ font-size: var(--reviewWordMaxPx);
 <!-- ✅ セッション結果モーダル（要求仕様版） -->
 <div class="modalBack" id="sessionBack" aria-label="session result">
   <div class="modal" role="dialog" aria-modal="true">
+    <div class="sessionMeta" id="sessionMeta"></div>
     <div class="sessionCenter">
       <div class="line1">結果！</div>
       <div class="line2" id="sessionPct">--%</div>
@@ -3467,6 +3482,7 @@ const qTimerFg = document.getElementById("qTimerFg");
 /* ✅ セッション結果DOM */
 const sessionBack = document.getElementById("sessionBack");
 const sessionPct  = document.getElementById("sessionPct");
+const sessionMeta = document.getElementById("sessionMeta");
 const sessionReward = document.getElementById("sessionReward");
 const wrongList   = document.getElementById("wrongList");
 const btnSessionClose = document.getElementById("btnSessionClose");
@@ -6435,6 +6451,12 @@ function openSessionResult(){
   if (!SESSION) return;
 
   const pct = Math.round(getSessionAchievementRate() * 100);
+
+  if (sessionMeta){
+    const grade = COURSE[Number(SELECTED_GRADE)]?.label || gradeLabel(SELECTED_GRADE);
+    const stageNumber = SESSION.stage === "pre1" ? "1" : SESSION.stage === "pre2" ? "2" : stageLabel(SESSION.stage);
+    sessionMeta.textContent = `${CURRENT.name}\n(${grade})${SESSION.lesson}-${stageNumber}`;
+  }
 
   // ✅ まず表示をリセット
   if (sessionReward){
