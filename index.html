@@ -496,6 +496,21 @@ font-size: var(--reviewWordMaxPx);
     }
     .speechControl.is-error .speechDot{ background:#d47b00; }
     @keyframes speechPulse{ 50%{ transform:scale(1.45); opacity:.55; } }
+    .speechTranscript{
+      position:absolute;
+      left:20px;
+      right:20px;
+      top:58px;
+      z-index:4;
+      min-height:1.4em;
+      color:var(--quizTextColor);
+      font-size:18px;
+      font-weight:900;
+      text-align:center;
+      word-break:break-word;
+      text-shadow:0 2px 8px rgba(255,255,255,.85);
+      pointer-events:none;
+    }
 
     .optBtn{
       width:100%;
@@ -1693,6 +1708,7 @@ font-size: var(--reviewWordMaxPx);
             <span class="speechDot" aria-hidden="true"></span>
             <span id="speechStatus">マイクを準備中</span>
           </button>
+          <div class="speechTranscript" id="speechTranscript" aria-live="polite"></div>
           <div class="quizCenterWord" id="quizWord"></div>
 <div class="quizExample" id="quizExample" style="display:none"></div>
           <div class="quizOptions" id="optGrid"></div>
@@ -3489,6 +3505,7 @@ const reviewBallSvg = document.getElementById("reviewBallSvg");
 const dropletLayer = document.getElementById("dropletLayer");
 const speechControl = document.getElementById("speechControl");
 const speechStatus = document.getElementById("speechStatus");
+const speechTranscript = document.getElementById("speechTranscript");
 
 const gradeFab = document.getElementById("gradeFab");
 const backFab = document.getElementById("backFab");
@@ -6901,7 +6918,6 @@ const SPEECH = {
   enabled: false,
   permissionGranted: false,
   listening: false,
-  questionId: "",
   restartTimer: null,
 };
 
@@ -6910,6 +6926,12 @@ function setSpeechStatus(text, state=""){
   speechStatus.textContent = text;
   speechControl.classList.toggle("is-listening", state === "listening");
   speechControl.classList.toggle("is-error", state === "error");
+}
+
+function showSpeechTranscript(text){
+  if (!speechTranscript) return;
+  const value = String(text ?? "").trim();
+  speechTranscript.textContent = value ? `「${value}」` : "";
 }
 
 function normalizeJapaneseSpeech(value){
@@ -6975,7 +6997,8 @@ function getSpeechRecognition(){
   if (SPEECH.recognition || !NativeSpeechRecognition) return SPEECH.recognition;
   const recognition = new NativeSpeechRecognition();
   recognition.lang = "ja-JP";
-  recognition.continuous = false;
+  // ステージ中は1つの認識セッションを維持し、問題ごとにマイクを起動し直さない。
+  recognition.continuous = true;
   recognition.interimResults = false;
   recognition.maxAlternatives = 5;
   recognition.onstart = ()=>{
@@ -6987,11 +7010,13 @@ function getSpeechRecognition(){
     for (let i=event.resultIndex; i<event.results.length; i++){
       for (let j=0; j<event.results[i].length; j++) alternatives.push(event.results[i][j].transcript);
     }
+    const spoken = alternatives[0] || "";
+    showSpeechTranscript(spoken);
     const buttons = [...optGrid.querySelectorAll(".optBtn:not(:disabled)")];
     const match = closestSpokenOption(alternatives, buttons.map(button=>button.textContent));
-    if (!match || ANSWERING || SPEECH.questionId !== String(CURRENT.currentQ?.word_id ?? "")) return;
+    if (!match || ANSWERING || !CURRENT.currentQ) return;
     const button = buttons.find(entry=>entry.textContent === match.option);
-    setSpeechStatus(`「${match.heard}」→ ${match.option}`);
+    setSpeechStatus(`判定：${match.option}`, "listening");
     if (button) submitAnswer(match.option, button);
   };
   recognition.onerror = event=>{
@@ -7016,6 +7041,7 @@ async function enableSpeechForStage(){
     return false;
   }
   setSpeechStatus("マイクの許可を確認中");
+  showSpeechTranscript("");
   try{
     if (!SPEECH.permissionGranted){
       if (!navigator.mediaDevices?.getUserMedia) throw new Error("media_devices_unavailable");
@@ -7048,7 +7074,6 @@ function startSpeechForQuestion(){
       recognition.grammars = grammars;
     }
   }
-  SPEECH.questionId = String(CURRENT.currentQ.word_id ?? "");
   try{ recognition.start(); }
   catch(_){ scheduleSpeechRestart(); }
 }
@@ -7100,7 +7125,6 @@ function startQuestionTimer(ms){
 
 function handleQuestionTimeout(){
   if (ANSWERING) return;
-  stopSpeechRecognition();
   if (!CURRENT.currentQ) {
     nextQuestionFast(true);
     return;
@@ -7232,6 +7256,7 @@ async function nextQuestionFast(forceFresh=false){
 
 function renderQuestionJson(j){
   clearOptions();
+  showSpeechTranscript("");
   quizWord.textContent = "";
   stopQuestionTimer();
   _questionShownAt = 0;
@@ -7333,7 +7358,6 @@ async function submitAnswer(text, chosenBtnEl){
   if (sessionBack.style.display === "flex") return;
 
   ANSWERING = true;
-  stopSpeechRecognition();
   stopQuestionTimer();
   resetPrefetch();
 
