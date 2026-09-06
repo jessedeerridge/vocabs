@@ -3046,14 +3046,21 @@ function getGaugeFill(name, grade, lesson){
   if (Number.isInteger(idx) && idx >= 0 && idx < GAUGE_COLORS.length) return GAUGE_COLORS[idx].fill;
   return null;
 }
-function ensureGaugeColorIfNeeded(name, grade, lesson, rate01){
-  if (!name || !lesson) return;
-  if (!(rate01 >= 0.01)) return;
+function ensureGaugeColor(name, grade, lesson){
+  if (!name || !lesson) return null;
+  const currentFill = getGaugeFill(name, grade, lesson);
+  if (currentFill) return currentFill;
+
   const k = _gaugeKey(name, grade, lesson);
-  if (_gaugeColorMap[k] != null) return;
   const idx = Math.floor(Math.random() * GAUGE_COLORS.length);
   _gaugeColorMap[k] = idx;
   saveGaugeColorMap(_gaugeColorMap);
+  return GAUGE_COLORS[idx].fill;
+}
+function ensureGaugeColorIfNeeded(name, grade, lesson, rate01){
+  if (!name || !lesson) return;
+  if (!(rate01 >= 0.01)) return;
+  ensureGaugeColor(name, grade, lesson);
 }
 
 function getCharaImage(charaKey){
@@ -6776,6 +6783,9 @@ function startStageCore(stage, metaOverride=null, lessonOverride=null){
 
   CURRENT.lesson = lesson;
   CURRENT.stage = stage;
+
+  // ステージ開始時にジュース色を一度だけ確定し、課選択画面でも同じ色を使う。
+  ensureGaugeColor(CURRENT.name, SELECTED_GRADE, CURRENT.lesson);
 
   if (lessonInfo) lessonInfo.textContent = `${gradeLabel(SELECTED_GRADE)} / ${CURRENT.lesson}`;
   if (stageBadge){
