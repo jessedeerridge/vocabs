@@ -380,6 +380,25 @@
       box-shadow:0 18px 42px rgba(0,0,0,.55);
       transition: none;
     }
+    .microphoneStatus{
+      position:absolute;
+      top:12px;
+      left:50%;
+      transform:translateX(-50%);
+      z-index:8;
+      max-width:calc(100% - 32px);
+      padding:6px 10px;
+      border-radius:999px;
+      background:rgba(255,255,255,.88);
+      color:#222;
+      font-size:12px;
+      font-weight:800;
+      text-align:center;
+      white-space:nowrap;
+      overflow:hidden;
+      text-overflow:ellipsis;
+    }
+    .microphoneStatus.is-error{ color:#a40018; }
 
     .quizProgressSvg{
       position:absolute;
@@ -1650,6 +1669,7 @@ font-size: var(--reviewWordMaxPx);
 
       <div class="quizStageWrap">
         <div class="quiz-stage" id="quizStage" aria-label="quiz stage">
+          <div class="microphoneStatus" id="microphoneStatus" role="status">🎤 準備中</div>
           <svg class="quizProgressSvg" id="quizProgressSvg" aria-hidden="true"></svg>
 
           <!-- ✅ pre2クイズ：黒丸が溜まるレイヤー -->
@@ -3445,6 +3465,7 @@ const btnNext = document.getElementById("btnNext");
 const btnLessonComplete = document.getElementById("btnLessonComplete");
 const btnBackLessons = document.getElementById("btnBackLessons");
 const quizExample = document.getElementById("quizExample");
+const microphoneStatus = document.getElementById("microphoneStatus");
 
 const quizStage = document.getElementById("quizStage");
 const quizProgressSvg = document.getElementById("quizProgressSvg");
@@ -4964,12 +4985,18 @@ async function apiQuestion(name, grade, lesson, stage){
     const optionsMeta = makeOptionsForWord(w);
     const options = optionsMeta.map(x=>x.display);
     const correctDisplay = (optionsMeta.find(x=>x.text === w.meaning)?.display) || w.meaning;
+    const configuredChoices = MIC.stageChoices?.[String(w.id)]?.choices || [];
+    const optionPronunciations = options.map(text=>{
+      const configured = configuredChoices.find(choice=>String(choice.text)===String(text));
+      return { text, pronunciations:configured?.pronunciations || [text] };
+    });
 
 return {
   ok:true,
   word_id: w.id,
   word: w.word,
   options,
+  option_pronunciations: optionPronunciations,
   correct: correctDisplay,
   example: w.example || ""
 };
@@ -6035,6 +6062,7 @@ backFab.onclick = async ()=>{
   }
   setStuStatus("", true);
   stopQuestionTimer();
+  stopSpeechRecognition();
   resetPrefetch();
   closeSessionResult();
   closeLowRatePop();
@@ -6426,6 +6454,7 @@ function pickFallbackWordId(excludeId){
 
 function openSessionResult(){
   if (!SESSION) return;
+  stopSpeechRecognition();
 
   const pct = Math.round(getSessionAchievementRate() * 100);
 
@@ -6721,6 +6750,132 @@ function escapeHtml(s){
     .replaceAll("'","&#39;");
 }
 
+/* ========= 音声による選択 ========= */
+const SpeechRecognitionApi = window.SpeechRecognition || window.webkitSpeechRecognition;
+const MIC = {
+  recognition: null,
+  stageChoices: {},
+  questionToken: 0,
+  ready: false,
+  starting: false,
+};
+
+function setMicrophoneStatus(text, isError=false){
+  if (!microphoneStatus) return;
+  microphoneStatus.textContent = text;
+  microphoneStatus.classList.toggle("is-error", isError);
+}
+
+async function loadStagePronunciations(grade, lesson, stage){
+  const response = await fetch("pronunciations.json", { cache:"no-cache" });
+  if (!response.ok) throw new Error(`発音JSONを取得できません（${response.status}）`);
+  const json = await response.json();
+  return json?.stages?.[`${grade}/${lesson}/${stage}`] || {};
+}
+
+function stopSpeechRecognition(){
+  MIC.questionToken += 1;
+  if (MIC.recognition){
+    MIC.recognition.onend = null;
+    try{ MIC.recognition.abort(); }catch(_){ }
+  }
+  MIC.recognition = null;
+}
+
+async function prepareStageMicrophone(grade, lesson, stage){
+  stopSpeechRecognition();
+  MIC.ready = false;
+  MIC.starting = true;
+  setMicrophoneStatus("🎤 マイクを準備しています…");
+  try{
+    MIC.stageChoices = await loadStagePronunciations(grade, lesson, stage);
+    if (!SpeechRecognitionApi) throw new Error("このブラウザは音声認識に対応していません");
+    if (!navigator.mediaDevices?.getUserMedia) throw new Error("マイクを利用できません");
+    // ステージ開始時にだけ許可を求める。認識中は取得した権限を利用する。
+    const stream = await navigator.mediaDevices.getUserMedia({ audio:true });
+    stream.getTracks().forEach(track=>track.stop());
+    MIC.ready = true;
+    setMicrophoneStatus("🎤 選択肢を発音してください");
+  }catch(error){
+    MIC.stageChoices = {};
+    setMicrophoneStatus(`🎤 ${error?.message || "マイクを利用できません"}（タップでも回答できます）`, true);
+  }finally{
+    MIC.starting = false;
+  }
+}
+
+function normalizeSpeech(value){
+  return String(value ?? "")
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(/[ァ-ヶ]/g, char=>String.fromCharCode(char.charCodeAt(0)-0x60))
+    .replace(/[\s、。,.!?！？・ー～〜「」『』（）()]/g, "");
+}
+
+function editDistance(a, b){
+  const left = [...normalizeSpeech(a)], right = [...normalizeSpeech(b)];
+  let row = Array.from({length:right.length+1}, (_,i)=>i);
+  left.forEach((char,i)=>{
+    const next = [i+1];
+    right.forEach((other,j)=>next.push(Math.min(next[j]+1, row[j+1]+1, row[j]+(char===other?0:1))));
+    row = next;
+  });
+  return row[right.length];
+}
+
+function closestSpokenOption(transcript){
+  const options = CURRENT.currentQ?.spokenOptions || [];
+  let best = null;
+  options.forEach(option=>{
+    const aliases = option.pronunciations?.length ? option.pronunciations : [option.text];
+    const distance = Math.min(...aliases.map(alias=>editDistance(transcript, alias)));
+    const length = Math.max(1, ...aliases.map(alias=>normalizeSpeech(alias).length));
+    const score = distance / length;
+    if (!best || score < best.score) best = { text:option.text, score };
+  });
+  return best;
+}
+
+function listenForSpokenAnswer(){
+  if (!MIC.ready || !SpeechRecognitionApi || ANSWERING || !CURRENT.currentQ) return;
+  stopSpeechRecognition();
+  const token = MIC.questionToken;
+  const recognition = new SpeechRecognitionApi();
+  MIC.recognition = recognition;
+  recognition.lang = "ja-JP";
+  recognition.continuous = false;
+  recognition.interimResults = false;
+  recognition.maxAlternatives = 5;
+  recognition.onresult = event=>{
+    if (token !== MIC.questionToken || ANSWERING) return;
+    const alternatives = [...event.results[event.results.length-1]];
+    const matches = alternatives.map(item=>({ transcript:item.transcript, match:closestSpokenOption(item.transcript) })).filter(item=>item.match);
+    matches.sort((a,b)=>a.match.score-b.match.score);
+    const selected = matches[0];
+    if (!selected) return;
+    const button = [...optGrid.querySelectorAll(".optBtn")].find(item=>item.textContent===selected.match.text);
+    setMicrophoneStatus(`🎤「${selected.transcript}」→ ${selected.match.text}`);
+    submitAnswer(selected.match.text, button || null);
+  };
+  recognition.onerror = event=>{
+    if (event.error === "not-allowed" || event.error === "service-not-allowed"){
+      MIC.ready = false;
+      setMicrophoneStatus("🎤 マイクが許可されていません（タップでも回答できます）", true);
+    }
+  };
+  recognition.onend = ()=>{
+    if (token === MIC.questionToken && MIC.ready && !ANSWERING && CURRENT.currentQ){
+      setTimeout(listenForCurrentQuestion, 180);
+    }
+  };
+  try{ recognition.start(); }catch(_){ }
+}
+
+function listenForCurrentQuestion(){
+  setMicrophoneStatus("🎤 選択肢を発音してください");
+  listenForSpokenAnswer();
+}
+
 /* ========= stageポップ ========= */
 let _pendingLesson = "";
 let _pendingLessonMeta = null;
@@ -6768,7 +6923,7 @@ function openStagePop(lesson, meta, anchorX, anchorY){
 }
 
 /* ✅ 開始処理の“本体”（閾値チェックなし） */
-function startStageCore(stage, metaOverride=null, lessonOverride=null){
+async function startStageCore(stage, metaOverride=null, lessonOverride=null){
   const meta = metaOverride ?? _pendingLessonMeta;
   const lesson = normLesson(lessonOverride ?? _pendingLesson);
 
@@ -6801,6 +6956,7 @@ function startStageCore(stage, metaOverride=null, lessonOverride=null){
 
   setReviewVisualMode();
 
+  await prepareStageMicrophone(SELECTED_GRADE, CURRENT.lesson, CURRENT.stage);
   primeNextQuestion();
   loadQuestion();
   closeStagePop();
@@ -6889,6 +7045,7 @@ function handleQuestionTimeout(){
   }
 
   ANSWERING = true;
+  stopSpeechRecognition();
 
   const btns = [...optGrid.querySelectorAll(".optBtn")];
   const correctLocal = String(CURRENT.currentQ.correct ?? "");
@@ -7057,7 +7214,9 @@ function renderQuestionJson(j){
 
 const example = (j.example != null) ? String(j.example) : "";
 
-CURRENT.currentQ = { raw:j, word_id: wordId, word, correct, example };
+const pronunciationByText = new Map((j.option_pronunciations || []).map(item=>[String(item.text), item.pronunciations]));
+const spokenOptions = options.map(text=>({ text:String(text), pronunciations:pronunciationByText.get(String(text)) || [String(text)] }));
+CURRENT.currentQ = { raw:j, word_id: wordId, word, correct, example, spokenOptions };
 quizWord.textContent = word || "（no word）";
 markWordShown(wordId);
 if (SESSION) SESSION.lastWordId = wordId;
@@ -7092,6 +7251,7 @@ requestAnimationFrame(applyReviewPromptLayout);
   requestAnimationFrame(applyReviewOptionLayout);
   _questionShownAt = performance.now();
   startQuestionTimer(QT_MS);
+  listenForCurrentQuestion();
 }
 
 async function loadQuestion(){
@@ -7113,6 +7273,7 @@ async function submitAnswer(text, chosenBtnEl){
   if (sessionBack.style.display === "flex") return;
 
   ANSWERING = true;
+  stopSpeechRecognition();
   stopQuestionTimer();
   resetPrefetch();
 
