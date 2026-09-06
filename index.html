@@ -1582,8 +1582,8 @@ font-size: var(--reviewWordMaxPx);
 
 <body>
 <div class="firebase-control" aria-label="Firebase接続状態">
-  <button id="firebaseDisconnect" type="button" aria-describedby="firebaseConnectionStatus" aria-pressed="false">接続</button>
-  <span id="firebaseConnectionStatus" role="status" aria-live="polite">非接続</span>
+  <button id="firebaseDisconnect" type="button" aria-describedby="firebaseConnectionStatus" aria-pressed="true">切断</button>
+  <span id="firebaseConnectionStatus" role="status" aria-live="polite">接続中…</span>
 </div>
 <button class="db-activity-indicator" id="dbActivityIndicator" type="button" role="status" aria-live="polite" aria-label="DB送受信未成功" title="DB送受信未成功">╌ / ╌</button>
 <main>
@@ -1793,7 +1793,7 @@ const firebaseConfig = {
 let db = null;
 let ref, get, set, update, runTransaction, goOffline, goOnline;
 let _firebaseLoadPromise = null;
-let DB_CONNECTION_ENABLED = false;
+let DB_CONNECTION_ENABLED = true;
 let DB_ACTIVITY_EPOCH = 0;
 let DB_ACTIVITY_SUCCEEDED = false;
 let DB_ACTIVITY_SESSION_ACTIVE = false;
