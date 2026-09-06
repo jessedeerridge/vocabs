@@ -464,6 +464,47 @@ font-size: var(--reviewWordMaxPx);
       z-index:3;
     }
 
+    .speechStatus{
+      position:absolute;
+      top:max(12px, env(safe-area-inset-top, 0px));
+      left:50%;
+      transform:translateX(-50%);
+      z-index:8;
+      max-width:calc(100% - 110px);
+      min-height:30px;
+      padding:6px 11px;
+      border:1px solid rgba(0,0,0,.14);
+      border-radius:999px;
+      background:rgba(255,255,255,.86);
+      color:#333;
+      font-size:12px;
+      font-weight:800;
+      line-height:1.3;
+      white-space:nowrap;
+      overflow:hidden;
+      text-overflow:ellipsis;
+      box-shadow:0 3px 12px rgba(0,0,0,.10);
+      backdrop-filter:blur(8px);
+    }
+    .speechStatus[data-state="listening"]{ color:#087638; border-color:#58bd7d; }
+    .speechStatus[data-state="error"]{ color:#9b2631; border-color:#df9aa1; }
+    .speechStatus:disabled{ cursor:default; }
+    .speechTranscript{
+      position:absolute;
+      top:max(52px, calc(env(safe-area-inset-top, 0px) + 40px));
+      left:50%;
+      transform:translateX(-50%);
+      z-index:8;
+      width:calc(100% - 48px);
+      color:var(--quizTextColor);
+      font-size:14px;
+      font-weight:800;
+      line-height:1.35;
+      text-align:center;
+      overflow-wrap:anywhere;
+      pointer-events:none;
+    }
+
     .optBtn{
       width:100%;
       padding:14px 14px;
@@ -1656,6 +1697,9 @@ font-size: var(--reviewWordMaxPx);
           <svg class="reviewBallSvg" id="reviewBallSvg" aria-hidden="true"></svg>
 
           <div class="dropletLayer" id="dropletLayer" aria-hidden="true"></div>
+          <button class="speechStatus" id="speechStatus" type="button" data-state="idle"
+            aria-live="polite" title="押すとマイクを再開します">🎤 マイク準備中</button>
+          <div class="speechTranscript" id="speechTranscript" aria-live="polite">ききとったことば：—</div>
           <div class="quizCenterWord" id="quizWord"></div>
 <div class="quizExample" id="quizExample" style="display:none"></div>
           <div class="quizOptions" id="optGrid"></div>
@@ -3452,6 +3496,8 @@ const btnNext = document.getElementById("btnNext");
 const btnLessonComplete = document.getElementById("btnLessonComplete");
 const btnBackLessons = document.getElementById("btnBackLessons");
 const quizExample = document.getElementById("quizExample");
+const speechStatus = document.getElementById("speechStatus");
+const speechTranscript = document.getElementById("speechTranscript");
 
 const quizStage = document.getElementById("quizStage");
 const quizProgressSvg = document.getElementById("quizProgressSvg");
@@ -5915,6 +5961,8 @@ async function finalizeReviewBallsAndShowResult(){
 
 /* ========= 画面表示 ========= */
 function showNameScreen(){
+  stopSpeechRecognition();
+  releaseSpeechMicrophone();
   IN_ROOM = false;
 
   /* 接続を有効にしている場合は、トップへ戻った時にも再接続・再送する。 */
@@ -5953,6 +6001,8 @@ function showNameScreen(){
 }
 
 async function showLessonList(){
+  stopSpeechRecognition();
+  releaseSpeechMicrophone();
   IN_ROOM = true;
   startDbActivitySession();
 
@@ -6042,6 +6092,7 @@ backFab.onclick = async ()=>{
   }
   setStuStatus("", true);
   stopQuestionTimer();
+  stopSpeechRecognition();
   resetPrefetch();
   closeSessionResult();
   closeLowRatePop();
@@ -6775,7 +6826,7 @@ function openStagePop(lesson, meta, anchorX, anchorY){
 }
 
 /* ✅ 開始処理の“本体”（閾値チェックなし） */
-function startStageCore(stage, metaOverride=null, lessonOverride=null){
+async function startStageCore(stage, metaOverride=null, lessonOverride=null){
   const meta = metaOverride ?? _pendingLessonMeta;
   const lesson = normLesson(lessonOverride ?? _pendingLesson);
 
@@ -6810,6 +6861,12 @@ function startStageCore(stage, metaOverride=null, lessonOverride=null){
   syncDropletColorToGauge();
 
   setReviewVisualMode();
+
+  // ユーザーがステージ開始を押した操作の中で許可を求める。
+  // 許可ダイアログ中に問題タイマーが進まないよう、問題取得より先に待つ。
+  quizWord.textContent = "マイクを準備しています…";
+  await prepareSpeechForStage();
+  if (quizBox.style.display === "none" || CURRENT.lesson !== lesson || CURRENT.stage !== stage) return;
 
   primeNextQuestion();
   loadQuestion();
@@ -6846,6 +6903,7 @@ lessonListBox.addEventListener("pointerdown", (e)=>{
 
 /* ========= クイズ ========= */
 const QT_MS = 4000;
+const SPEECH_QT_MS = 8000;
 const ANSWER_FEEDBACK_MS = {
   correct: 260,
   incorrect: 1200,
@@ -6855,6 +6913,196 @@ let _qtRAF = null;
 let _qtStart = 0;
 let _qtActive = false;
 let _questionShownAt = 0;
+
+/* ========= 音声回答（外部SDK/国外CDNを使わない） ========= */
+const SpeechRecognitionClass = window.SpeechRecognition || window.webkitSpeechRecognition || null;
+let speechRecognition = null;
+let speechPermission = "unknown";
+let speechQuestionToken = 0;
+let speechRestartTimer = null;
+let speechUseLocalRecognition = false;
+let speechMediaStream = null;
+
+function setSpeechStatus(text, state="idle"){
+  if (!speechStatus) return;
+  speechStatus.textContent = text;
+  speechStatus.dataset.state = state;
+}
+
+function setSpeechTranscript(value=""){
+  if (!speechTranscript) return;
+  const spoken = String(value).trim();
+  speechTranscript.textContent = `ききとったことば：${spoken || "—"}`;
+}
+
+function hasLiveSpeechTrack(){
+  return !!speechMediaStream?.getAudioTracks().some(track=>track.readyState === "live");
+}
+
+function releaseSpeechMicrophone(){
+  if (speechMediaStream) speechMediaStream.getTracks().forEach(track=>track.stop());
+  speechMediaStream = null;
+}
+
+function stopSpeechRecognition(){
+  speechQuestionToken++;
+  if (speechRestartTimer) clearTimeout(speechRestartTimer);
+  speechRestartTimer = null;
+  if (speechRecognition){
+    speechRecognition.onresult = null;
+    speechRecognition.onerror = null;
+    speechRecognition.onend = null;
+    try{ speechRecognition.abort(); }catch(e){}
+  }
+  speechRecognition = null;
+}
+
+async function prepareSpeechForStage(){
+  stopSpeechRecognition();
+  setSpeechTranscript();
+  if (!SpeechRecognitionClass){
+    speechPermission = "unsupported";
+    setSpeechStatus("🎤 この端末は音声回答非対応（タップで回答）", "error");
+    return false;
+  }
+  if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia){
+    speechPermission = "unsupported";
+    setSpeechStatus("🎤 HTTPSで開くと音声回答できます", "error");
+    return false;
+  }
+  setSpeechStatus("🎤 マイクの使用を許可してください");
+  try{
+    // ステージ中は最初に許可されたストリームを保持し、毎問題で許可を取り直さない。
+    if (!hasLiveSpeechTrack()){
+      releaseSpeechMicrophone();
+      speechMediaStream = await navigator.mediaDevices.getUserMedia({
+        audio:{ echoCancellation:true, noiseSuppression:true, autoGainControl:true }
+      });
+    }
+    speechPermission = "granted";
+    speechUseLocalRecognition = false;
+    // 対応ブラウザでは端末内の日本語認識を優先し、GFW越しの国外サービスに依存しない。
+    if (typeof SpeechRecognitionClass.available === "function"){
+      try{
+        const availability = await SpeechRecognitionClass.available({langs:["ja-JP"], processLocally:true});
+        speechUseLocalRecognition = availability === "available";
+      }catch(e){}
+    }
+    setSpeechStatus(speechUseLocalRecognition ? "🎤 端末内の音声回答を準備しました" : "🎤 音声回答を準備しました");
+    return true;
+  }catch(e){
+    speechPermission = "denied";
+    setSpeechStatus("🎤 許可なし（選択肢をタップできます）", "error");
+    return false;
+  }
+}
+
+function normalizeJapaneseSpeech(value){
+  return String(value ?? "")
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(/[ァ-ヶ]/g, ch=>String.fromCharCode(ch.charCodeAt(0) - 0x60))
+    .replace(/[\s\u3000、。,.!?！？・「」『』（）()\[\]【】]/g, "")
+    .replace(/^(えっと|ええと|あの|その)+/, "")
+    .replace(/(です|だよ|だ|かな)$/g, "")
+    .replace(/ー+/g, "");
+}
+
+function editDistance(a, b){
+  const prev = Array.from({length:b.length + 1}, (_, i)=>i);
+  for (let i=1; i<=a.length; i++){
+    let diagonal = prev[0];
+    prev[0] = i;
+    for (let j=1; j<=b.length; j++){
+      const above = prev[j];
+      prev[j] = Math.min(prev[j] + 1, prev[j-1] + 1, diagonal + (a[i-1] === b[j-1] ? 0 : 1));
+      diagonal = above;
+    }
+  }
+  return prev[b.length];
+}
+
+function findSpokenChoice(transcripts){
+  const choices = [...optGrid.querySelectorAll(".optBtn")].map(button=>({
+    button,
+    text:button.dataset.answer ?? button.textContent,
+    normalized:normalizeJapaneseSpeech(button.dataset.answer ?? button.textContent)
+  })).filter(item=>item.normalized);
+  let best = null;
+  for (const raw of transcripts){
+    const heard = normalizeJapaneseSpeech(raw);
+    if (!heard) continue;
+    for (const choice of choices){
+      const distance = editDistance(heard, choice.normalized);
+      const score = distance / Math.max(heard.length, choice.normalized.length, 1);
+      if (!best || score < best.score) best = {...choice, score, heard, raw};
+    }
+  }
+  if (!best) return null;
+  // 一文字回答は誤選択を避けて完全一致だけにする。長い語も差が大きい時は再聴取する。
+  const exact = best.heard === best.normalized;
+  const acceptable = exact || (best.normalized.length >= 2 && best.score <= (best.normalized.length <= 3 ? 0.34 : 0.42));
+  return acceptable ? best : null;
+}
+
+function buildSpeechGrammar(options){
+  const GrammarList = window.SpeechGrammarList || window.webkitSpeechGrammarList;
+  if (!GrammarList || !options.length) return null;
+  const safe = options.map(v=>String(v).replace(/[;=|<>]/g, "")).filter(Boolean);
+  if (!safe.length) return null;
+  const list = new GrammarList();
+  list.addFromString(`#JSGF V1.0; grammar answers; public <answer> = ${safe.join(" | ")} ;`, 1);
+  return list;
+}
+
+function beginSpeechForQuestion(){
+  stopSpeechRecognition();
+  if (speechPermission !== "granted" || !SpeechRecognitionClass || ANSWERING) return;
+  const options = [...optGrid.querySelectorAll(".optBtn")].map(b=>b.dataset.answer ?? b.textContent);
+  if (!options.length) return;
+  const token = speechQuestionToken;
+  const recognition = new SpeechRecognitionClass();
+  speechRecognition = recognition;
+  recognition.lang = "ja-JP";
+  recognition.continuous = false;
+  recognition.interimResults = false;
+  recognition.maxAlternatives = 10;
+  if (speechUseLocalRecognition) recognition.processLocally = true;
+  const grammars = buildSpeechGrammar(options);
+  if (grammars) recognition.grammars = grammars;
+  setSpeechStatus("🎤 こたえを話してね", "listening");
+  recognition.onresult = event=>{
+    if (token !== speechQuestionToken || ANSWERING) return;
+    const alternatives = [];
+    for (let i=event.resultIndex; i<event.results.length; i++){
+      for (let j=0; j<event.results[i].length; j++) alternatives.push(event.results[i][j].transcript);
+    }
+    setSpeechTranscript(alternatives[0] || "");
+    const match = findSpokenChoice(alternatives);
+    if (match){
+      setSpeechStatus(`🎤「${match.raw}」`, "idle");
+      submitAnswer(match.text, match.button);
+    } else {
+      setSpeechStatus("🎤 表示された文字を確認して、もう一度話してね", "error");
+    }
+  };
+  recognition.onerror = event=>{
+    if (token !== speechQuestionToken) return;
+    if (event.error === "not-allowed" || event.error === "service-not-allowed") speechPermission = "denied";
+    const retryable = ["no-speech", "audio-capture", "network", "aborted"].includes(event.error);
+    setSpeechStatus(retryable ? "🎤 聞き取れません。押して再開" : "🎤 音声を使えません（タップで回答）", "error");
+  };
+  recognition.onend = ()=>{
+    if (speechRecognition === recognition) speechRecognition = null;
+  };
+  try{ recognition.start(); }
+  catch(e){ setSpeechStatus("🎤 押してマイクを再開", "error"); }
+}
+
+speechStatus?.addEventListener("click", async ()=>{
+  if (speechPermission !== "granted") await prepareSpeechForStage();
+  if (CURRENT.currentQ && !ANSWERING) beginSpeechForQuestion();
+});
 
 function initCircle(){
   const r = 18;
@@ -6899,6 +7147,7 @@ function handleQuestionTimeout(){
   }
 
   ANSWERING = true;
+  stopSpeechRecognition();
 
   const btns = [...optGrid.querySelectorAll(".optBtn")];
   const correctLocal = String(CURRENT.currentQ.correct ?? "");
@@ -7024,6 +7273,8 @@ async function nextQuestionFast(forceFresh=false){
 
 function renderQuestionJson(j){
   clearOptions();
+  stopSpeechRecognition();
+  setSpeechTranscript();
   quizWord.textContent = "";
   stopQuestionTimer();
   _questionShownAt = 0;
@@ -7086,6 +7337,7 @@ requestAnimationFrame(applyReviewPromptLayout);
     b.className = "optBtn";
     b.type = "button";
     b.textContent = text;
+    b.dataset.answer = String(text);
 
     b.addEventListener("pointerdown", (ev)=>{
       ev.preventDefault();
@@ -7101,7 +7353,8 @@ requestAnimationFrame(applyReviewPromptLayout);
 
   requestAnimationFrame(applyReviewOptionLayout);
   _questionShownAt = performance.now();
-  startQuestionTimer(QT_MS);
+  startQuestionTimer(speechPermission === "granted" ? SPEECH_QT_MS : QT_MS);
+  beginSpeechForQuestion();
 }
 
 async function loadQuestion(){
@@ -7123,6 +7376,7 @@ async function submitAnswer(text, chosenBtnEl){
   if (sessionBack.style.display === "flex") return;
 
   ANSWERING = true;
+  stopSpeechRecognition();
   stopQuestionTimer();
   resetPrefetch();
 
