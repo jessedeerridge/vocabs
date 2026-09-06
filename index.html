@@ -489,6 +489,21 @@ font-size: var(--reviewWordMaxPx);
     .speechStatus[data-state="listening"]{ color:#087638; border-color:#58bd7d; }
     .speechStatus[data-state="error"]{ color:#9b2631; border-color:#df9aa1; }
     .speechStatus:disabled{ cursor:default; }
+    .speechTranscript{
+      position:absolute;
+      top:max(52px, calc(env(safe-area-inset-top, 0px) + 40px));
+      left:50%;
+      transform:translateX(-50%);
+      z-index:8;
+      width:calc(100% - 48px);
+      color:var(--quizTextColor);
+      font-size:14px;
+      font-weight:800;
+      line-height:1.35;
+      text-align:center;
+      overflow-wrap:anywhere;
+      pointer-events:none;
+    }
 
     .optBtn{
       width:100%;
@@ -1684,6 +1699,7 @@ font-size: var(--reviewWordMaxPx);
           <div class="dropletLayer" id="dropletLayer" aria-hidden="true"></div>
           <button class="speechStatus" id="speechStatus" type="button" data-state="idle"
             aria-live="polite" title="押すとマイクを再開します">🎤 マイク準備中</button>
+          <div class="speechTranscript" id="speechTranscript" aria-live="polite">ききとったことば：—</div>
           <div class="quizCenterWord" id="quizWord"></div>
 <div class="quizExample" id="quizExample" style="display:none"></div>
           <div class="quizOptions" id="optGrid"></div>
@@ -3474,6 +3490,7 @@ const btnLessonComplete = document.getElementById("btnLessonComplete");
 const btnBackLessons = document.getElementById("btnBackLessons");
 const quizExample = document.getElementById("quizExample");
 const speechStatus = document.getElementById("speechStatus");
+const speechTranscript = document.getElementById("speechTranscript");
 
 const quizStage = document.getElementById("quizStage");
 const quizProgressSvg = document.getElementById("quizProgressSvg");
@@ -5938,6 +5955,7 @@ async function finalizeReviewBallsAndShowResult(){
 /* ========= 画面表示 ========= */
 function showNameScreen(){
   stopSpeechRecognition();
+  releaseSpeechMicrophone();
   IN_ROOM = false;
 
   /* 接続を有効にしている場合は、トップへ戻った時にも再接続・再送する。 */
@@ -5977,6 +5995,7 @@ function showNameScreen(){
 
 async function showLessonList(){
   stopSpeechRecognition();
+  releaseSpeechMicrophone();
   IN_ROOM = true;
   startDbActivitySession();
 
@@ -6892,11 +6911,27 @@ let speechPermission = "unknown";
 let speechQuestionToken = 0;
 let speechRestartTimer = null;
 let speechUseLocalRecognition = false;
+let speechMediaStream = null;
 
 function setSpeechStatus(text, state="idle"){
   if (!speechStatus) return;
   speechStatus.textContent = text;
   speechStatus.dataset.state = state;
+}
+
+function setSpeechTranscript(value=""){
+  if (!speechTranscript) return;
+  const spoken = String(value).trim();
+  speechTranscript.textContent = `ききとったことば：${spoken || "—"}`;
+}
+
+function hasLiveSpeechTrack(){
+  return !!speechMediaStream?.getAudioTracks().some(track=>track.readyState === "live");
+}
+
+function releaseSpeechMicrophone(){
+  if (speechMediaStream) speechMediaStream.getTracks().forEach(track=>track.stop());
+  speechMediaStream = null;
 }
 
 function stopSpeechRecognition(){
@@ -6914,6 +6949,7 @@ function stopSpeechRecognition(){
 
 async function prepareSpeechForStage(){
   stopSpeechRecognition();
+  setSpeechTranscript();
   if (!SpeechRecognitionClass){
     speechPermission = "unsupported";
     setSpeechStatus("🎤 この端末は音声回答非対応（タップで回答）", "error");
@@ -6926,10 +6962,13 @@ async function prepareSpeechForStage(){
   }
   setSpeechStatus("🎤 マイクの使用を許可してください");
   try{
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio:{ echoCancellation:true, noiseSuppression:true, autoGainControl:true }
-    });
-    stream.getTracks().forEach(track=>track.stop());
+    // ステージ中は最初に許可されたストリームを保持し、毎問題で許可を取り直さない。
+    if (!hasLiveSpeechTrack()){
+      releaseSpeechMicrophone();
+      speechMediaStream = await navigator.mediaDevices.getUserMedia({
+        audio:{ echoCancellation:true, noiseSuppression:true, autoGainControl:true }
+      });
+    }
     speechPermission = "granted";
     speechUseLocalRecognition = false;
     // 対応ブラウザでは端末内の日本語認識を優先し、GFW越しの国外サービスに依存しない。
@@ -7028,12 +7067,13 @@ function beginSpeechForQuestion(){
     for (let i=event.resultIndex; i<event.results.length; i++){
       for (let j=0; j<event.results[i].length; j++) alternatives.push(event.results[i][j].transcript);
     }
+    setSpeechTranscript(alternatives[0] || "");
     const match = findSpokenChoice(alternatives);
     if (match){
       setSpeechStatus(`🎤「${match.raw}」`, "idle");
       submitAnswer(match.text, match.button);
     } else {
-      setSpeechStatus("🎤 もう一度、短く話してね", "error");
+      setSpeechStatus("🎤 表示された文字を確認して、もう一度話してね", "error");
     }
   };
   recognition.onerror = event=>{
@@ -7224,6 +7264,7 @@ async function nextQuestionFast(forceFresh=false){
 function renderQuestionJson(j){
   clearOptions();
   stopSpeechRecognition();
+  setSpeechTranscript();
   quizWord.textContent = "";
   stopQuestionTimer();
   _questionShownAt = 0;
